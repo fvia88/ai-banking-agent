@@ -1,0 +1,33 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "recipient_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Recipient Id",
+      "type": "string"
+    },
+    "user_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "User Id",
+      "type": "string"
+    },
+    "display_name": {
+      "title": "Display Name",
+      "type": "string"
+    },
+    "account_number_masked": {
+      "title": "Account Number Masked",
+      "type": "string"
+    }
+  },
+  "required": [
+    "recipient_id",
+    "user_id",
+    "display_name",
+    "account_number_masked"
+  ],
+  "title": "Recipient",
+  "type": "object"
+}

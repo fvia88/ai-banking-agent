@@ -1,0 +1,28 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "confirmation_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Confirmation Id",
+      "type": "string"
+    },
+    "action_digest": {
+      "title": "Action Digest",
+      "type": "string"
+    },
+    "idempotency_key": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Idempotency Key",
+      "type": "string"
+    }
+  },
+  "required": [
+    "confirmation_id",
+    "action_digest",
+    "idempotency_key"
+  ],
+  "title": "ConfirmActionRequest",
+  "type": "object"
+}

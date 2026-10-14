@@ -1,0 +1,47 @@
+{
+  "$defs": {
+    "ActionStatus": {
+      "enum": [
+        "PROPOSED",
+        "PENDING_CONFIRMATION",
+        "PENDING_MFA",
+        "COMPLETED",
+        "REJECTED",
+        "FAILED",
+        "CANCELLED"
+      ],
+      "title": "ActionStatus",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "action_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Action Id",
+      "type": "string"
+    },
+    "status": {
+      "$ref": "#/$defs/ActionStatus"
+    },
+    "message": {
+      "title": "Message",
+      "type": "string"
+    },
+    "audit_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Audit Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "action_id",
+    "status",
+    "message",
+    "audit_id"
+  ],
+  "title": "ExecutionResult",
+  "type": "object"
+}

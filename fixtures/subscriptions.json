@@ -1,0 +1,20 @@
+[
+  {
+    "subscription_id": "sub_streambox",
+    "user_id": "user_001",
+    "merchant": "StreamBox",
+    "estimated_amount": "39.00",
+    "cadence": "monthly",
+    "status": "active",
+    "cancellation_supported": true
+  },
+  {
+    "subscription_id": "sub_cloudmusic",
+    "user_id": "user_001",
+    "merchant": "CloudMusic",
+    "estimated_amount": "19.00",
+    "cadence": "monthly",
+    "status": "active",
+    "cancellation_supported": false
+  }
+]

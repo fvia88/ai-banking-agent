@@ -1,0 +1,44 @@
+{
+  "$defs": {
+    "Tier": {
+      "enum": [
+        "GREEN",
+        "YELLOW",
+        "RED"
+      ],
+      "title": "Tier",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "tier": {
+      "$ref": "#/$defs/Tier"
+    },
+    "allowed_to_proceed": {
+      "title": "Allowed To Proceed",
+      "type": "boolean"
+    },
+    "requires_confirmation": {
+      "title": "Requires Confirmation",
+      "type": "boolean"
+    },
+    "requires_mfa": {
+      "title": "Requires Mfa",
+      "type": "boolean"
+    },
+    "reason_code": {
+      "title": "Reason Code",
+      "type": "string"
+    }
+  },
+  "required": [
+    "tier",
+    "allowed_to_proceed",
+    "requires_confirmation",
+    "requires_mfa",
+    "reason_code"
+  ],
+  "title": "PolicyDecision",
+  "type": "object"
+}

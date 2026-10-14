@@ -1,0 +1,20 @@
+[
+  {
+    "recipient_id": "recipient_alice",
+    "user_id": "user_001",
+    "display_name": "Alice Chen",
+    "account_number_masked": "**** 1234"
+  },
+  {
+    "recipient_id": "recipient_bob",
+    "user_id": "user_001",
+    "display_name": "Bob Li",
+    "account_number_masked": "**** 5678"
+  },
+  {
+    "recipient_id": "recipient_alice_2",
+    "user_id": "user_001",
+    "display_name": "Alice Wang",
+    "account_number_masked": "**** 9012"
+  }
+]

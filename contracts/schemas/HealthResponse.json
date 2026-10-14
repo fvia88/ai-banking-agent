@@ -1,0 +1,12 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "default": "ok",
+      "title": "Status",
+      "type": "string"
+    }
+  },
+  "title": "HealthResponse",
+  "type": "object"
+}

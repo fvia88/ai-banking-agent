@@ -1,0 +1,21 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "transaction_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Transaction Id",
+      "type": "string"
+    },
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    }
+  },
+  "required": [
+    "transaction_id",
+    "reason"
+  ],
+  "title": "Anomaly",
+  "type": "object"
+}

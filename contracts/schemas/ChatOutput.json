@@ -1,0 +1,89 @@
+{
+  "$defs": {
+    "ActionProposal": {
+      "additionalProperties": false,
+      "properties": {
+        "proposal_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Proposal Id",
+          "type": "string"
+        },
+        "tool": {
+          "$ref": "#/$defs/ToolName"
+        },
+        "arguments": {
+          "additionalProperties": true,
+          "title": "Arguments",
+          "type": "object"
+        },
+        "rationale": {
+          "default": "",
+          "title": "Rationale",
+          "type": "string"
+        }
+      },
+      "required": [
+        "proposal_id",
+        "tool",
+        "arguments"
+      ],
+      "title": "ActionProposal",
+      "type": "object"
+    },
+    "ActionStatus": {
+      "enum": [
+        "PROPOSED",
+        "PENDING_CONFIRMATION",
+        "PENDING_MFA",
+        "COMPLETED",
+        "REJECTED",
+        "FAILED",
+        "CANCELLED"
+      ],
+      "title": "ActionStatus",
+      "type": "string"
+    },
+    "ToolName": {
+      "enum": [
+        "get_balance",
+        "analyze_spending",
+        "list_subscriptions",
+        "request_transfer",
+        "request_subscription_cancel"
+      ],
+      "title": "ToolName",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "conversation_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Conversation Id",
+      "type": "string"
+    },
+    "reply": {
+      "title": "Reply",
+      "type": "string"
+    },
+    "actions": {
+      "items": {
+        "$ref": "#/$defs/ActionProposal"
+      },
+      "title": "Actions",
+      "type": "array"
+    },
+    "status": {
+      "$ref": "#/$defs/ActionStatus"
+    }
+  },
+  "required": [
+    "conversation_id",
+    "reply",
+    "status"
+  ],
+  "title": "ChatOutput",
+  "type": "object"
+}

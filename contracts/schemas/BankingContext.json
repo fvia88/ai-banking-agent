@@ -1,0 +1,56 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "user_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "User Id",
+      "type": "string"
+    },
+    "account_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Account Id",
+      "type": "string"
+    },
+    "daily_transfer_total": {
+      "anyOf": [
+        {
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,14}|(?=[\\d.]{1,17}0*$)\\d{0,14}\\.\\d{0,2}0*$)",
+          "type": "string"
+        }
+      ],
+      "title": "Daily Transfer Total"
+    },
+    "account_balance": {
+      "anyOf": [
+        {
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,14}|(?=[\\d.]{1,17}0*$)\\d{0,14}\\.\\d{0,2}0*$)",
+          "type": "string"
+        }
+      ],
+      "title": "Account Balance"
+    },
+    "account_locked": {
+      "default": false,
+      "title": "Account Locked",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "user_id",
+    "account_id",
+    "daily_transfer_total",
+    "account_balance"
+  ],
+  "title": "BankingContext",
+  "type": "object"
+}

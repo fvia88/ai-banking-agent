@@ -1,0 +1,21 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "verification_code": {
+      "title": "Verification Code",
+      "type": "string"
+    },
+    "idempotency_key": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Idempotency Key",
+      "type": "string"
+    }
+  },
+  "required": [
+    "verification_code",
+    "idempotency_key"
+  ],
+  "title": "VerifyActionRequest",
+  "type": "object"
+}

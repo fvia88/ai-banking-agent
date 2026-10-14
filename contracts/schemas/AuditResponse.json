@@ -1,0 +1,58 @@
+{
+  "$defs": {
+    "AuditEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "audit_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Audit Id",
+          "type": "string"
+        },
+        "action_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Action Id",
+          "type": "string"
+        },
+        "event_type": {
+          "title": "Event Type",
+          "type": "string"
+        },
+        "timestamp": {
+          "format": "date-time",
+          "title": "Timestamp",
+          "type": "string"
+        },
+        "reason_code": {
+          "title": "Reason Code",
+          "type": "string"
+        }
+      },
+      "required": [
+        "audit_id",
+        "action_id",
+        "event_type",
+        "timestamp",
+        "reason_code"
+      ],
+      "title": "AuditEvent",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "events": {
+      "items": {
+        "$ref": "#/$defs/AuditEvent"
+      },
+      "title": "Events",
+      "type": "array"
+    }
+  },
+  "required": [
+    "events"
+  ],
+  "title": "AuditResponse",
+  "type": "object"
+}

@@ -1,0 +1,82 @@
+{
+  "$defs": {
+    "Anomaly": {
+      "additionalProperties": false,
+      "properties": {
+        "transaction_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Transaction Id",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "transaction_id",
+        "reason"
+      ],
+      "title": "Anomaly",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "period": {
+      "pattern": "^\\d{4}-(0[1-9]|1[0-2])$",
+      "title": "Period",
+      "type": "string"
+    },
+    "currency": {
+      "const": "CNY",
+      "default": "CNY",
+      "title": "Currency",
+      "type": "string"
+    },
+    "total_spending": {
+      "anyOf": [
+        {
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,14}|(?=[\\d.]{1,17}0*$)\\d{0,14}\\.\\d{0,2}0*$)",
+          "type": "string"
+        }
+      ],
+      "title": "Total Spending"
+    },
+    "category_totals": {
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "minimum": 0.0,
+            "type": "number"
+          },
+          {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,14}|(?=[\\d.]{1,17}0*$)\\d{0,14}\\.\\d{0,2}0*$)",
+            "type": "string"
+          }
+        ]
+      },
+      "title": "Category Totals",
+      "type": "object"
+    },
+    "anomalies": {
+      "items": {
+        "$ref": "#/$defs/Anomaly"
+      },
+      "title": "Anomalies",
+      "type": "array"
+    }
+  },
+  "required": [
+    "period",
+    "total_spending",
+    "category_totals"
+  ],
+  "title": "SpendingReport",
+  "type": "object"
+}

@@ -1,0 +1,16 @@
+[
+  {
+    "account_id": "account_001",
+    "user_id": "user_001",
+    "currency": "CNY",
+    "balance": "5000.00",
+    "locked": false
+  },
+  {
+    "account_id": "account_002",
+    "user_id": "user_002",
+    "currency": "CNY",
+    "balance": "3500.00",
+    "locked": false
+  }
+]

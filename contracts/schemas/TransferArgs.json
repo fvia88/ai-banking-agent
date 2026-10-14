@@ -1,0 +1,43 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "source_account_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Source Account Id",
+      "type": "string"
+    },
+    "recipient_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Recipient Id",
+      "type": "string"
+    },
+    "amount": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        {
+          "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,14}|(?=[\\d.]{1,17}0*$)\\d{0,14}\\.\\d{0,2}0*$)",
+          "type": "string"
+        }
+      ],
+      "title": "Amount"
+    },
+    "currency": {
+      "const": "CNY",
+      "default": "CNY",
+      "title": "Currency",
+      "type": "string"
+    }
+  },
+  "required": [
+    "source_account_id",
+    "recipient_id",
+    "amount"
+  ],
+  "title": "TransferArgs",
+  "type": "object"
+}

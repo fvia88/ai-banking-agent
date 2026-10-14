@@ -1,0 +1,70 @@
+{
+  "$defs": {
+    "ActionProposal": {
+      "additionalProperties": false,
+      "properties": {
+        "proposal_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Proposal Id",
+          "type": "string"
+        },
+        "tool": {
+          "$ref": "#/$defs/ToolName"
+        },
+        "arguments": {
+          "additionalProperties": true,
+          "title": "Arguments",
+          "type": "object"
+        },
+        "rationale": {
+          "default": "",
+          "title": "Rationale",
+          "type": "string"
+        }
+      },
+      "required": [
+        "proposal_id",
+        "tool",
+        "arguments"
+      ],
+      "title": "ActionProposal",
+      "type": "object"
+    },
+    "ToolName": {
+      "enum": [
+        "get_balance",
+        "analyze_spending",
+        "list_subscriptions",
+        "request_transfer",
+        "request_subscription_cancel"
+      ],
+      "title": "ToolName",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "reply": {
+      "title": "Reply",
+      "type": "string"
+    },
+    "proposals": {
+      "items": {
+        "$ref": "#/$defs/ActionProposal"
+      },
+      "title": "Proposals",
+      "type": "array"
+    },
+    "needs_clarification": {
+      "default": false,
+      "title": "Needs Clarification",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "reply"
+  ],
+  "title": "AgentResult",
+  "type": "object"
+}
