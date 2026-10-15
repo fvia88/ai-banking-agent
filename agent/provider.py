@@ -16,6 +16,11 @@ class Intent(BaseModel):
 class ProviderError(Exception):
     """Safe provider failure; never expose SDK error payloads."""
 
+    def __init__(self, message, *, category="provider_error", http_code=None):
+        super().__init__(message)
+        self.category = category
+        self.http_code = http_code
+
 
 class Provider(Protocol):
     def extract(self, message: str) -> str: ...

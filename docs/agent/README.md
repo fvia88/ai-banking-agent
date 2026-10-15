@@ -26,7 +26,7 @@ agent/.venv and are ignored; do not commit secrets or the virtual environment.
 
 - AGENT_PROVIDER: mock (default) or gemini for service calls.
 - GEMINI_API_KEY: environment only; required in Gemini mode.
-- GEMINI_MODEL: default gemini-2.5-flash; configure an available free-tier model.
+- GEMINI_MODEL: default gemini-3.8-flash; configure an available free-tier model.
 - AGENT_TIMEOUT_SECONDS: integer 1 through 60, default 20.
 
 CLI explicitly defaults to mock regardless of AGENT_PROVIDER; use --provider
@@ -64,3 +64,32 @@ warning; tests pass. Mock CLI clarification and October spending demos passed.
 The live Gemini CLI returned the safe failure response; successful live model
 generation remains unverified. The SDK adapter was also tested offline with a
 fake SDK client for success, configured timeout/schema, and error redaction.
+
+### Live Gemini diagnosis
+
+The original default gemini-2.5-flash returned 404: unavailable to new users.
+The original response_schema=Intent conversion returned 400 because the SDK
+sent additional_properties in the legacy schema format. The adapter now uses
+gemini-3.8-flash and response_json_schema=Intent.model_json_schema(). The corrected
+live request returned 503 with a high-demand message. Live generation is still
+unverified; this remaining service response is distinct from the two corrected
+configuration errors. The user-facing service deliberately returns a generic
+failure and does not forward raw provider errors.
+
+For current troubleshooting, run this in the same terminal as the failed CLI:
+
+```powershell
+agent/.venv/Scripts/python.exe -m agent.diagnose
+```
+
+This makes one live request and reports a fixed safe error category and HTTP
+code, or validates a successful balance intent. It never prints keys, raw model
+output, prompts, or SDK exception payloads. Existing GEMINI_MODEL environment
+overrides take precedence over the new default; remove an obsolete override
+with Remove-Item Env:GEMINI_MODEL before retrying.
+
+A subsequent live probe returned HTTP 400 with "User location is not supported
+for the API use." The diagnostic now labels this unsupported_location rather
+than invalid_request. This is a region-eligibility rejection, not evidence that
+the JSON schema is still invalid. Prior 503/504 responses were different errors;
+successful model generation remains unverified.
