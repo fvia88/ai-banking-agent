@@ -1,3 +1,5 @@
+# gemini_provider.py connects my agent to real gemini API
+# it sends a msg w/ instructions, requests structured JSON, and convert failures into safe error categories
 import os
 from .provider import Intent, ProviderError
 from .prompts import SYSTEM_INSTRUCTION
@@ -14,11 +16,16 @@ class GeminiProvider:
             timeout = int(os.getenv("AGENT_TIMEOUT_SECONDS", "20"))
             if not 1 <= timeout <= 60:
                 raise ValueError("Invalid timeout")
+            # create the api client
             with genai.Client(api_key=key, http_options=types.HttpOptions(
                 timeout=timeout * 1000, retry_options=types.HttpRetryOptions(attempts=1)
             )) as client:
+                # calls gemini and stores the returned response
+                # this is the part tht makes the online API request
                 response = client.models.generate_content(
                     model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
+                    # katanya sih terminak setting $env:GEMINI_MODEL = 'gemini-3.1-flash-lite'
+                    # takes precedence over the codes default, if tht env var is absent, code still defaults to 3.8 flash
                     contents=message,
                     config=types.GenerateContentConfig(
                         system_instruction=SYSTEM_INSTRUCTION,

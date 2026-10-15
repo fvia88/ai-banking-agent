@@ -1,4 +1,5 @@
 """Read-only synthetic CLI helpers, not production analytics or execution."""
+# mock_tools.py reads fixtures, it provides fake account/recipient context and banking results
 import json
 from pathlib import Path
 from decimal import Decimal

@@ -1,4 +1,6 @@
 """Opt-in live probe. Prints only fixed categories, never raw SDK errors."""
+# troubleshooting tool for gemini connection
+# run with python -m agent.diagnose
 from .gemini_provider import GeminiProvider
 from .provider import Intent, ProviderError
 from pydantic import ValidationError
