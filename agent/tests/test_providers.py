@@ -75,3 +75,33 @@ def test_diagnostic_distinguishes_location_rejection(monkeypatch, capsys):
     output = capsys.readouterr().out
     assert "unsupported_location" in output and "400" in output
     assert "private-test-secret" not in output
+
+
+@pytest.mark.parametrize("error_name,category", [
+    ("ReadTimeout", "network_timeout"),
+    ("ConnectError", "network_connection_error"),
+    ("RemoteProtocolError", "network_protocol_error"),
+    ("ProxyError", "proxy_error"),
+])
+def test_transport_error_categories_are_safe(monkeypatch, error_name, category):
+    import httpx
+    monkeypatch.setenv("GEMINI_API_KEY", "private-test-secret")
+    def broken(**kwargs):
+        raise getattr(httpx, error_name)("private-test-secret")
+    monkeypatch.setattr(genai, "Client", broken)
+    with pytest.raises(ProviderError) as caught:
+        GeminiProvider().extract("Analyze spending 2026-10")
+    assert caught.value.category == category
+    assert caught.value.http_code is None
+    assert "private-test-secret" not in str(caught.value)
+
+
+def test_diagnostic_accepts_cancellation_prompt(monkeypatch, capsys):
+    from agent import diagnose
+    class Cancellation:
+        def extract(self, message):
+            assert message == "Cancel my subscription"
+            return Intent(intent="cancel").model_dump_json()
+    monkeypatch.setattr(diagnose, "GeminiProvider", Cancellation)
+    assert diagnose.main("Cancel my subscription", "cancel") == 0
+    assert "structured cancel intent validated" in capsys.readouterr().out

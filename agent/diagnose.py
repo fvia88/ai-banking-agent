@@ -1,20 +1,21 @@
 """Opt-in live probe. Prints only fixed categories, never raw SDK errors."""
 # troubleshooting tool for gemini connection
 # run with python -m agent.diagnose
+import argparse
 from .gemini_provider import GeminiProvider
 from .provider import Intent, ProviderError
 from pydantic import ValidationError
 
 
-def main():
+def main(message="What is my balance?", expected_intent="balance"):
     print("Live Gemini diagnostic (one request, no bank operations)")
     try:
-        payload = GeminiProvider().extract("What is my balance?")
+        payload = GeminiProvider().extract(message)
         intent = Intent.model_validate_json(payload)
-        if intent.intent != "balance":
+        if intent.intent != expected_intent:
             print("RESULT: unexpected_intent")
             return 1
-        print("RESULT: success; structured balance intent validated")
+        print(f"RESULT: success; structured {intent.intent} intent validated")
         return 0
     except ProviderError as exc:
         print(f"RESULT: {exc.category}")
@@ -31,6 +32,10 @@ def main():
             "unsupported_location": "Gemini rejected the request because the user location is unsupported. Check Google's official region eligibility; changing request schema will not resolve this rejection.",
             "access_denied": "Check account, project permissions, and supported-region eligibility.",
             "sdk_or_network_error": "Check local network connectivity and SDK installation.",
+            "network_timeout": "The HTTP client timed out without a completed response.",
+            "proxy_error": "The HTTP client reported a proxy connection failure.",
+            "network_protocol_error": "The HTTP connection ended with a protocol error before generation completed.",
+            "network_connection_error": "The HTTP client could not establish or maintain the connection.",
         }
         print(hints.get(exc.category, "Provider response was unsuccessful."))
         return 1
@@ -40,4 +45,9 @@ def main():
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    parser = argparse.ArgumentParser(description="One live Gemini intent diagnostic; no banking operations")
+    parser.add_argument("--message", default="What is my balance?")
+    parser.add_argument("--expected-intent", default="balance",
+                        choices=["balance", "spending", "subscriptions", "transfer", "cancel", "unknown"])
+    args = parser.parse_args()
+    raise SystemExit(main(args.message, args.expected_intent))

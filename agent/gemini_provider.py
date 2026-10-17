@@ -49,6 +49,21 @@ class GeminiProvider:
                         404: "model_not_found", 429: "quota_or_rate_limit",
                         500: "provider_server_error", 502: "gateway_error",
                         503: "provider_unavailable", 504: "gateway_timeout"}.get(code, "sdk_or_network_error")
+            # HTTPX failures can occur before any HTTP response exists. Preserve
+            # a safe, useful distinction instead of hiding all of them together.
+            if code is None:
+                try:
+                    import httpx
+                    if isinstance(exc, httpx.TimeoutException):
+                        category = "network_timeout"
+                    elif isinstance(exc, httpx.ProxyError):
+                        category = "proxy_error"
+                    elif isinstance(exc, httpx.ProtocolError):
+                        category = "network_protocol_error"
+                    elif isinstance(exc, httpx.NetworkError):
+                        category = "network_connection_error"
+                except ImportError:
+                    pass
             # Inspect internally, but expose only a fixed category, not raw errors.
             provider_message = str(getattr(exc, "message", "")).lower()
             if code in (400, 403) and "user location is not supported" in provider_message:
