@@ -98,3 +98,90 @@ HTTP Request (Client)
     2. `/accounts` returns the correct seeded balance (`15250.00`).
     3. `/transactions?period=2026-10` properly filters October transactions.
     4. `/chat` returns a `PROPOSED` status for transfer intent.
+
+# Milestone 1: Backend Baseline & Read APIs (2026/10/17)
+
+## 1. What Was Implemented
+
+In Milestone 1, we set up the core backend foundation and data layer:
+- **FastAPI Application:** Modular router architecture with global error handling, CORS, and `/api/v1` prefix.
+- **Database Layer (SQLAlchemy 2.0):** Defined schemas for `users`, `accounts`, `transactions`, and `audit_logs` using exact Decimal precision for money (`CNY`).
+- **Deterministic Seed Script:** Populates a synthetic test user (`Alice Wang` / `usr_demo_01`), account balance (`15,250.00 CNY`), and sample transactions.
+- **Read-Only Endpoints:**
+  - `GET /api/v1/health`: Server health check.
+  - `GET /api/v1/accounts`: Authenticated account balance query.
+  - `GET /api/v1/transactions?period=YYYY-MM`: Filtered spending history.
+- **Mock Agent Integration & Chat Endpoint:**
+  - `POST /api/v1/chat`: Connects via a swappable adapter to a mock agent, returning typed contract proposals (`ActionProposal`) without executing unauthorized money movements.
+- **Automated Test Suite:** Pytest coverage for all endpoints with an isolated in-memory test database.
+
+---
+
+## 2. Files Added & Modified
+
+```text
+backend/
+  app/
+    api/
+      accounts.py        # GET /api/v1/accounts
+      chat.py            # POST /api/v1/chat
+      deps.py            # Demo user session resolution
+      health.py          # GET /api/v1/health
+      transactions.py    # GET /api/v1/transactions
+    db/
+      models.py          # SQLAlchemy ORM models
+      seed.py            # Deterministic database seeder
+      session.py         # DB connection & session factory
+    mocks/
+      agent.py           # Contract-compliant P1 mock agent
+    services/
+      adapters.py        # Swappable agent bridge
+    config.py            # App settings (Pydantic Settings)
+    main.py              # Application entrypoint
+  tests/
+    conftest.py          # Test fixtures & in-memory DB
+    test_milestone1.py   # Pytest suite
+  requirements.txt       # Backend package dependencies
+docker-compose.yml       # Multi-container orchestration scaffold
+docs/app/milestone_1.md  # Milestone documentation
+```
+
+How to recreate: 
+
+####  Set up Virtual Environment & Dependencies
+
+```text
+# Create and activate virtual environment
+python -m venv .venv
+
+# On Windows PowerShell:
+.venv\Scripts\Activate.ps1
+
+# Install backend dependencies
+pip install -r backend/requirements.txt
+```
+
+#### Seed the Local Database
+
+```text
+# Set Python path and seed demo data
+# Windows PowerShell:
+$env:PYTHONPATH="backend;."
+python -m backend.app.db.seed
+```
+
+#### Run the Automated Tests
+
+```text
+# Windows PowerShell:
+$env:PYTHONPATH="backend;."
+python -m pytest backend/tests/test_milestone1.py -v
+```
+
+#### Run the Local Development Server
+
+```text
+python -m uvicorn app.main:app --app-dir backend --reload --port 8000
+```
+
+Open browser and go to http://127.0.0.1:8000/docs to open Swagger UI.
