@@ -33,4 +33,22 @@ def test_chat_mock_proposal(client):
     assert body["conversation_id"] == "conv_test_123"
     assert len(body["actions"]) == 1
     assert body["actions"][0]["tool"] == "request_transfer"
-    assert body["status"] == "PROPOSED"
+    assert body["status"] == "PENDING_CONFIRMATION"
+
+def test_chat_creates_server_action_record(client, db_session):
+    payload = {
+        "conversation_id": "conv_verify_01",
+        "message": "Transfer 500 CNY to Bob"
+    }
+    response = client.post("/api/v1/chat", json=payload, headers={"X-Demo-User-Id": "usr_demo_01"})
+    assert response.status_code == 200
+    data = response.json()
+    
+    # Check that status is now PENDING_CONFIRMATION
+    assert data["status"] == "PENDING_CONFIRMATION"
+    assert len(data["actions"]) == 1
+    
+    action_args = data["actions"][0]["arguments"]
+    assert "action_id" in action_args
+    assert "action_digest" in action_args
+    assert len(action_args["action_digest"]) == 64  # Valid SHA-256 length

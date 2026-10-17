@@ -51,3 +51,18 @@ class AuditLogModel(Base):
     payload_digest = Column(String(128), nullable=False)
     details = Column(Text, nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+class ActionApprovalModel(Base):
+    __tablename__ = "action_approvals"
+
+    action_id = Column(String(64), primary_key=True)
+    user_id = Column(String(64), nullable=False)
+    tool = Column(String(64), nullable=False)
+    tier = Column(String(16), default="YELLOW", nullable=False)
+    payload_json = Column(Text, nullable=False)
+    action_digest = Column(String(64), nullable=False)  # SHA-256 hex
+    status = Column(String(32), default="PENDING_CONFIRMATION", nullable=False)
+    verification_code = Column(String(16), nullable=True)  # Simulated OTP for RED tier
+    failed_attempts = Column(Numeric(2, 0), default=0, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    expires_at = Column(DateTime, nullable=False)
