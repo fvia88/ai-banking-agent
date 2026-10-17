@@ -185,3 +185,95 @@ python -m uvicorn app.main:app --app-dir backend --reload --port 8000
 ```
 
 Open browser and go to http://127.0.0.1:8000/docs to open Swagger UI.
+
+# Milestone 2: Backend & Action Verification/Execution
+
+> *Our core architecture rule is active: **the AI is untrusted and only proposes actions**. The backend handles identity, risk checks, and money movement.*  
+> 
+> *Right now, our backend can:*  
+> 1. *Serve account balances and filtered transaction history via authenticated demo sessions.*  
+> 2. *Take chat prompts and issue tamper-proof action tickets sealed with SHA-256 digests.*  
+> 3. *Enforce the 3 permission tiers: Green (automatic), Yellow (user confirmation), and Red (MFA required for transfers over 1,000 CNY).*  
+> 4. *Simulate MFA verification with anti-brute-force lockout after 3 bad attempts.*  
+> 5. *Execute transfers atomically with overdraft prevention, idempotency (double-clicks won't double-charge), and an immutable audit trail.*  
+> 
+> *All endpoints are tested with 100% passing tests and fully interactive on Swagger UI."*
+
+---
+
+### What You Did (Mapped to Your Project Directory)
+
+Here is the exact map of what you built in your owned folders:
+
+```text
+backend/
+├── app/
+│   ├── config.py                 # App settings & default demo user (usr_demo_01)
+│   ├── main.py                   # FastAPI app entrypoint, CORS, and error handlers
+│   │
+│   ├── api/                      # REST Endpoints (The Front Desks)
+│   │   ├── deps.py               # Authenticates demo session from X-Demo-User-Id
+│   │   ├── health.py             # GET /api/v1/health
+│   │   ├── accounts.py           # GET /api/v1/accounts (reads balances)
+│   │   ├── transactions.py       # GET /api/v1/transactions?period=YYYY-MM
+│   │   ├── chat.py               # POST /api/v1/chat (receives intent, issues action ticket)
+│   │   ├── approvals.py          # POST /actions/{id}/confirm & POST /actions/{id}/verify (MFA)
+│   │   └── audit.py              # GET /api/v1/audit (immutable audit trail)
+│   │
+│   ├── db/                       # The Database Vault (SQLAlchemy 2.0 + SQLite)
+│   │   ├── models.py             # Schemas: users, accounts, transactions, audit_logs, action_approvals
+│   │   ├── session.py            # DB engine & session generator
+│   │   └── seed.py               # Seeds Alice Wang (usr_demo_01), 15,250 CNY, & sample bills
+│   │
+│   ├── mocks/                    # Swappable Team Stubs
+│   │   ├── agent.py              # Stubs P1 (Agent proposals for transfers & balance)
+│   │   └── security.py           # Stubs P4 (Risk policy: Green/Yellow/Red tiers + lock)
+│   │
+│   └── services/                 # Business Logic & Security
+│       ├── actions.py            # Strict TransferArgs validation & SHA-256 tamper-proof digest
+│       ├── adapters.py           # Switchboard (swaps between mock stubs and real team code)
+│       └── executor.py           # Real money cashier: overdraft check, balance deduction, & ledger
+│
+├── tests/                        # 100% Passing Automated Pytest Suite
+│   ├── conftest.py               # In-memory test database & FastAPI TestClient
+│   ├── test_milestone1.py        # Tests health, accounts, transactions, & chat proposal
+│   ├── test_policy.py            # Tests test vectors T02 (Yellow), T03 (Red), T11 (Account lock)
+│   ├── test_approvals.py         # Tests confirmation, digest anti-tamper, & MFA 3-attempt lock
+│   └── test_execution.py         # Tests atomic transfer, ledger write, & T06 idempotency
+│
+├── requirements.txt              # Pinned backend dependencies
+docker-compose.yml                # Multi-container orchestration scaffold (Postgres + App)
+.gitignore                        # Protects repo from .venv, __pycache__, and local .db
+```
+
+---
+
+### What Test Vectors You Already Satisfy
+Show your teammates this list from Section 8 of the challenge brief:
+* **T01 (Read balance):** Working (`GET /api/v1/accounts`).
+* **T02 (Transfer $\le$ 1,000 CNY):** Working (`YELLOW` tier $\rightarrow$ requires confirmation).
+* **T03 (Transfer $>$ 1,000 CNY):** Working (`RED` tier $\rightarrow$ requires simulated MFA).
+* **T04 (Negative transfer):** Working (rejected by `TransferArgs` validation).
+* **T06 (Double-click / replay confirmation):** Working (idempotent, never charges twice).
+* **T11 (Locked account):** Working (blocks all state-changing operations).
+
+---
+
+### Your Brief "To-Do Next" List (Person 2)
+
+When you return to code, here are the remaining milestones in order:
+
+1. **Phase 3: Subscriptions & Cross-Scenario Orchestration (Backend Finish Line)**
+   * Create `backend/app/mocks/subscriptions.py` (simulating Person 5).
+   * Implement `GET /api/v1/subscriptions` to detect recurring payments.
+   * Add subscription cancellation confirmation to `/confirm`.
+   * Add the cross-scenario flow: cancel subscription $\rightarrow$ propose transferring projected savings.
+2. **Phase 4: Frontend Web Interface (`frontend/`)**
+   * Initialize React + Vite + TypeScript + Tailwind.
+   * Build the Chat window connected to `/api/v1/chat`.
+   * Build the **Yellow confirmation modal** and **Red MFA OTP modal**.
+   * Add account balance and transaction cards.
+3. **Phase 5: Docker & Team Integration (`infra/`)**
+   * Write `Dockerfile.backend` and `Dockerfile.frontend`.
+   * Test `docker compose up --build` with PostgreSQL.
+   * Flip `use_mock = False` in `adapters.py` to plug in your teammates' real code as they push it!
