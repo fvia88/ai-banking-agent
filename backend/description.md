@@ -186,7 +186,7 @@ python -m uvicorn app.main:app --app-dir backend --reload --port 8000
 
 Open browser and go to http://127.0.0.1:8000/docs to open Swagger UI.
 
-# Milestone 2: Backend & Action Verification/Execution
+# Milestone 2: Backend & Action Verification/Execution (2026/10/17)
 
 > *Our core architecture rule is active: **the AI is untrusted and only proposes actions**. The backend handles identity, risk checks, and money movement.*  
 > 

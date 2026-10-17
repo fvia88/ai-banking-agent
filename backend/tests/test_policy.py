@@ -1,4 +1,6 @@
 # backend/tests/test_policy.py
+import pytest
+from app.services.actions import create_action_record
 from decimal import Decimal
 from contracts.enums import ToolName, Tier
 from contracts.models import ActionProposal, BankingContext
@@ -9,7 +11,7 @@ def test_t02_transfer_under_daily_limit_is_yellow():
     proposal = ActionProposal(
         proposal_id="p1",
         tool=ToolName.REQUEST_TRANSFER,
-        arguments={"amount": "500.00", "recipient": "Bob"}
+        arguments={"amount": "500.00", "recipient_id": "usr_bob_01"}
     )
     context = BankingContext(
         user_id="u1",
@@ -29,7 +31,7 @@ def test_t03_transfer_over_daily_limit_is_red():
     proposal = ActionProposal(
         proposal_id="p2",
         tool=ToolName.REQUEST_TRANSFER,
-        arguments={"amount": "500.00", "recipient": "Bob"}
+        arguments={"amount": "500.00", "recipient_id": "usr_bob_01"}
     )
     context = BankingContext(
         user_id="u1",
@@ -48,7 +50,7 @@ def test_t11_locked_account_blocked():
     proposal = ActionProposal(
         proposal_id="p3",
         tool=ToolName.REQUEST_TRANSFER,
-        arguments={"amount": "100.00", "recipient": "Bob"}
+        arguments={"amount": "100.00", "recipient_id": "usr_bob_01"}
     )
     context = BankingContext(
         user_id="u1",
@@ -60,3 +62,20 @@ def test_t11_locked_account_blocked():
     decision = MockSecurityAdapter.evaluate_action(proposal, context)
     assert decision.allowed_to_proceed is False
     assert decision.reason_code == "ACCOUNT_LOCKED"
+
+def test_missing_recipient_id_rejected():
+    """Validation test: missing recipient_id raises ValueError and halts execution."""
+    proposal = ActionProposal(
+        proposal_id="p_bad",
+        tool=ToolName.REQUEST_TRANSFER,
+        arguments={"amount": "100.00"}  # No recipient_id!
+    )
+    context = BankingContext(
+        user_id="u1",
+        account_id="acc1",
+        daily_transfer_total="0.00",
+        account_balance="1000.00",
+        account_locked=False
+    )
+    with pytest.raises(ValueError, match="Missing or empty required field: 'recipient_id'"):
+        create_action_record("u1", proposal, "acc1", context)

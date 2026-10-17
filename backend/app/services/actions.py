@@ -48,11 +48,19 @@ def create_action_record(
 
     action_id = f"act_{uuid.uuid4().hex[:12]}"
     
-    # 2. Validate typed arguments
+    # 2. Validate typed arguments strictly
     if proposal.tool == ToolName.REQUEST_TRANSFER:
+        raw_recipient = proposal.arguments.get("recipient_id")
+        if not raw_recipient or not str(raw_recipient).strip():
+            raise ValueError("Missing or empty required field: 'recipient_id'")
+
+        raw_amount = proposal.arguments.get("amount")
+        if raw_amount is None:
+            raise ValueError("Missing required field: 'amount'")
+
         validated_args = TransferArgs(
-            recipient_id=proposal.arguments.get("recipient", "Bob"),
-            amount=Decimal(str(proposal.arguments.get("amount", "0.00"))),
+            recipient_id=str(raw_recipient).strip(),
+            amount=Decimal(str(raw_amount)),
             currency=proposal.arguments.get("currency", "CNY"),
             source_account_id=source_account_id
         )

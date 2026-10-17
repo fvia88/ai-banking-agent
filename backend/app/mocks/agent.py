@@ -35,7 +35,7 @@ class MockAgentAdapter:
                     ActionProposal(
                         proposal_id=f"prop_{uuid.uuid4().hex[:8]}",
                         tool=ToolName.REQUEST_TRANSFER,
-                        arguments={"recipient": "Bob", "amount": "500.00", "currency": "CNY"},
+                        arguments={"recipient_id": "Bob", "amount": "500.00", "currency": "CNY"},
                         rationale="Drafted requested transfer"
                     )
                 ],
