@@ -40,6 +40,47 @@ def test_invalid_money(amount):
     assert not run(f"Transfer {amount} to Bob").proposals
 
 
+@pytest.mark.parametrize("amount", ["-100", "0"])
+def test_nonpositive_amount_asks_for_correction(amount):
+    result = run(f"Transfer {amount} to Bob")
+    assert not result.proposals and result.needs_clarification
+    assert "greater than zero" in result.reply
+    assert "retry" not in result.reply.lower()
+
+
+@pytest.mark.parametrize("account_ids", [None, [], ["account_001", "account_002"]])
+def test_missing_or_ambiguous_account_requires_selection(account_ids):
+    catalog = demo_catalog()
+    for entry in catalog:
+        if account_ids is None:
+            entry["context"].pop("account_ids")
+        else:
+            entry["context"]["account_ids"] = account_ids
+    result = run("Transfer 500 to Bob", catalog)
+    assert not result.proposals and result.needs_clarification
+    assert "select a source account" in result.reply
+
+
+@pytest.mark.parametrize("message", ["Transfer 500 to Bob", "Cancel StreamBox"])
+def test_trusted_account_lock_blocks_both_mutations(message):
+    catalog = demo_catalog()
+    for entry in catalog:
+        entry["context"]["account_locked"] = True
+    result = run(message, catalog)
+    assert not result.proposals and not result.needs_clarification
+    assert "locked" in result.reply
+    # A subsequent independent call with unlocked context remains usable.
+    assert run(message).proposals
+
+
+def test_locked_context_still_allows_balance_proposal():
+    catalog = demo_catalog()
+    for entry in catalog:
+        entry["context"]["account_locked"] = True
+    result = run("What is my balance?", catalog)
+    assert result.proposals[0].tool.value == "get_balance"
+
+
 def test_clarification_continuation():
     assert run("Transfer 500 to Alice").needs_clarification
     catalog = demo_catalog()

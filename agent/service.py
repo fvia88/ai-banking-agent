@@ -101,12 +101,18 @@ def _process(chat, catalog, results):
     if extracted.intent == "transfer":
         if not extracted.amount:
             return clarify("How much CNY would you like to transfer?")
+        try:
+            amount = Decimal(extracted.amount)
+        except InvalidOperation:
+            return clarify("Please enter a valid CNY transfer amount greater than zero.")
+        if not amount.is_finite() or amount <= 0:
+            return clarify("The transfer amount must be greater than zero. How much CNY would you like to transfer?")
         if not extracted.recipient:
             return clarify("Who should receive the transfer?")
         # Fail closed if the model invents an amount absent from the user request.
         import re
         amounts = re.findall(r"(?<!\w)[+-]?\d+(?:\.\d+)?", message)
-        if Decimal(extracted.amount) not in [Decimal(a) for a in amounts]:
+        if amount not in [Decimal(a) for a in amounts]:
             raise ValueError("Ungrounded amount")
         recipients = [Recipient.model_validate(r) for r in context.get("recipients", [])]
         name = extracted.recipient.casefold()
