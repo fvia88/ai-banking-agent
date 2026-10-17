@@ -23,9 +23,8 @@ class GeminiProvider:
                 # calls gemini and stores the returned response
                 # this is the part tht makes the online API request
                 response = client.models.generate_content(
-                    model=os.getenv("GEMINI_MODEL", "gemini-3.8-flash"),
-                    # katanya sih terminak setting $env:GEMINI_MODEL = 'gemini-3.1-flash-lite'
-                    # takes precedence over the codes default, if tht env var is absent, code still defaults to 3.8 flash
+                    model=os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite"),
+                    # An explicit GEMINI_MODEL environment setting overrides this default.
                     contents=message,
                     config=types.GenerateContentConfig(
                         system_instruction=SYSTEM_INSTRUCTION,
@@ -36,9 +35,15 @@ class GeminiProvider:
                         temperature=0,
                     ),
                 )
-                if not response.text:
+                candidates = response.candidates or []
+                content = candidates[0].content if len(candidates) == 1 else None
+                # Do not expose reasoning metadata or use the SDK convenience
+                # accessor that repeatedly warns about thought-signature parts.
+                text = "".join(part.text for part in (content.parts or [])
+                               if part.text and not part.thought) if content else ""
+                if not text:
                     raise ProviderError("Empty response", category="empty_response")
-                return response.text
+                return text
         except ProviderError:
             raise
         except Exception as exc:

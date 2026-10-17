@@ -26,14 +26,14 @@ agent/.venv and are ignored; do not commit secrets or the virtual environment.
 
 - AGENT_PROVIDER: mock (default) or gemini for service calls.
 - GEMINI_API_KEY: environment only; required in Gemini mode.
-- GEMINI_MODEL: default gemini-3.8-flash; configure an available free-tier model.
+- GEMINI_MODEL: default gemini-3.1-flash-lite; an explicit environment value overrides it.
 - AGENT_TIMEOUT_SECONDS: integer 1 through 60, default 20.
 
 CLI explicitly defaults to mock regardless of AGENT_PROVIDER; use --provider
 gemini to opt in. It does not silently substitute mock results on API failure.
 
 ```powershell
-$env:GEMINI_MODEL = 'gemini-3.8-flash'
+$env:GEMINI_MODEL = 'gemini-3.1-flash-lite'
 agent/.venv/Scripts/python.exe -m agent.cli 'What is my balance?' --provider gemini
 ```
 
@@ -115,3 +115,11 @@ not broadened here and remains part of later conversation-harness work.
 82 offline tests passed, including provider-independent request-framing cases
 using deliberately incorrect model interpretations. The existing SDK/Pydantic
 deprecation and thought-signature warnings are separate from this change.
+
+## Milestone two completed on 17 October 2026
+
+See milestone-2.md for the final scope, live evidence, commands, and limits.
+The default model is now Gemini 3.1 Flash-Lite. Earlier default/model failures
+above are historical observations. The adapter reads visible text candidate
+parts directly and excludes thought parts. One metadata notice can still arise
+inside the pinned SDK; the SDK/Pydantic deprecation warning also remains.

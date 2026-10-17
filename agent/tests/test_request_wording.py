@@ -61,3 +61,16 @@ def test_polite_request_still_checks_amount_and_recipient(monkeypatch):
     result = process(monkeypatch, "Could you send 500 to Alice?",
                      Intent(intent="transfer", amount="500", recipient="Alice"))
     assert not result.proposals and result.needs_clarification
+
+
+@pytest.mark.parametrize("message,intent,tool", [
+    ("whats my balnce?", Intent(intent="balance"), "get_balance"),
+    ("How much money do I have?", Intent(intent="balance"), "get_balance"),
+    ("How much did I spend in 2026-10?", Intent(intent="spending", period="2026-10"), "analyze_spending"),
+    ("Show my recurring charges", Intent(intent="subscriptions"), "list_subscriptions"),
+])
+def test_language_interpretation_can_reach_read_tools(monkeypatch, message, intent, tool):
+    # Recorded interpretations test service behavior, not a claim that a stub
+    # understands language. Real Gemini results are recorded separately in docs.
+    result = process(monkeypatch, message, intent)
+    assert result.proposals[0].tool.value == tool

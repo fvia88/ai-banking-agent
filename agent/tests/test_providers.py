@@ -1,4 +1,5 @@
 import pytest
+from types import SimpleNamespace
 from google import genai
 from agent.gemini_provider import GeminiProvider
 from agent.provider import Intent, ProviderError
@@ -9,6 +10,7 @@ from agent.mock_tools import demo_catalog
 
 def test_sdk_adapter_success(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "test-only-not-a-real-key")
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
     captured = {}
     class Client:
         def __init__(self, **kwargs):
@@ -20,13 +22,31 @@ def test_sdk_adapter_success(monkeypatch):
             pass
         def generate_content(self, **kwargs):
             captured.update(kwargs)
-            return type("Response", (), {"text": '{"intent":"balance"}'})()
+            return SimpleNamespace(candidates=[SimpleNamespace(content=SimpleNamespace(parts=[
+                SimpleNamespace(text="private reasoning", thought=True),
+                SimpleNamespace(text=None, thought_signature="private signature", thought=False),
+                SimpleNamespace(text='{"intent":"balance"}', thought=False),
+            ]))])
     monkeypatch.setattr(genai, "Client", Client)
     assert Intent.model_validate_json(GeminiProvider().extract("balance")).intent == "balance"
     assert captured["config"].response_json_schema == Intent.model_json_schema()
     assert captured["config"].response_schema is None
-    assert captured["model"] == "gemini-3.8-flash"
+    assert captured["model"] == "gemini-3.1-flash-lite"
     assert captured["http_options"].timeout == 20000
+
+
+def test_empty_sdk_response_does_not_invent_intent(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "test-only")
+    class Client:
+        def __init__(self, **kwargs): self.models = self
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def generate_content(self, **kwargs):
+            return SimpleNamespace(candidates=[])
+    monkeypatch.setattr(genai, "Client", Client)
+    with pytest.raises(ProviderError) as caught:
+        GeminiProvider().extract("balance")
+    assert caught.value.category == "empty_response"
 
 
 def test_sdk_adapter_redacts_errors(monkeypatch):
