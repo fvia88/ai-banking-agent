@@ -6,6 +6,7 @@ from contracts.models import (ChatInput, AgentResult, ActionProposal, Account,
                               Recipient, Subscription, SpendingReport, ExecutionResult)
 from contracts.tool_schemas import validate_tool_arguments
 from .provider import Intent, ProviderError, get_provider
+from .request_guard import is_direct_request
 
 
 def clarify(reply):
@@ -76,10 +77,10 @@ def _process(chat, catalog, results):
                "cancel": "request_subscription_cancel"}
     tool = mapping.get(extracted.intent)
     # State-changing intent must be explicit in the original pending/current request.
-    request_text = (previous or chat.message).strip().lower()
-    if extracted.intent == "transfer" and not request_text.startswith(("transfer ", "send ")):
+    request_text = previous or chat.message
+    if extracted.intent == "transfer" and not is_direct_request(request_text, "transfer"):
         return clarify("Please explicitly request the transfer and its exact amount and recipient.")
-    if extracted.intent == "cancel" and not request_text.startswith("cancel "):
+    if extracted.intent == "cancel" and not is_direct_request(request_text, "cancel"):
         return clarify("Please explicitly request cancellation of a verified subscription.")
     if not tool:
         return clarify("Please request one balance, spending, subscription, transfer, or cancellation step at a time.")

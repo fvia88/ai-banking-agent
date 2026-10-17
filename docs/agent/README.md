@@ -92,4 +92,26 @@ A subsequent live probe returned HTTP 400 with "User location is not supported
 for the API use." The diagnostic now labels this unsupported_location rather
 than invalid_request. This is a region-eligibility rejection, not evidence that
 the JSON schema is still invalid. Prior 503/504 responses were different errors;
-successful model generation remains unverified.
+successful model generation was unverified at the time of that probe.
+
+## Natural request wording verified on 17 October 2026
+
+The service now accepts common direct polite forms, including "Could you send
+500 yuan to Bob?", "Please transfer 500 to Bob", and "I want to give 500 yuan
+to Bob" when the provider extracts the corresponding intent and arguments.
+The exact "Could you send 500 yuan to Bob?" prompt passed a live Gemini
+3.1 Flash-Lite check and returned a validated request_transfer proposal.
+
+request_guard.py checks request framing, while the provider interprets intent.
+The guard conservatively rejects negations, quotes, reported note/merchant
+instructions, and hypothetical/conditional forms. This is a bounded safeguard,
+not a complete semantic security mechanism; unrecognized wording asks for a
+fresh explicit request. Backend validation and approval remain mandatory.
+Existing numeric-amount grounding and verified recipient checks remain in force.
+The mock parser still supports its original limited phrases; this change does
+not give it Gemini's language capabilities. Multi-turn polite-request replay is
+not broadened here and remains part of later conversation-harness work.
+
+82 offline tests passed, including provider-independent request-framing cases
+using deliberately incorrect model interpretations. The existing SDK/Pydantic
+deprecation and thought-signature warnings are separate from this change.
