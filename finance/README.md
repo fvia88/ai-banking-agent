@@ -54,14 +54,16 @@ python -m finance.cli --period 2026-09 --synthetic      # report on the P3 edge-
 python -m finance.cli --period 2026-10 --json           # SpendingReport JSON
 ```
 
-## Open questions for the team
+## Decisions (agreed 2026-10-17)
 
-1. **Outbound transfers:** should P2P transfers count as spending? Currently yes. This can be
-   switched off with `SpendingConfig(excluded_debit_categories=frozenset({"transfer"}))`.
-2. **Refunds:** totals are gross. Net-of-refund spending would need a new contract field.
-3. **Period-level notes** (e.g. "2 credits excluded") can't fit `Anomaly`, because it requires a
-   `transaction_id`. They're available via `spending_diagnostics()`. If the UI needs them in
-   the report, propose an optional `notes: list[str]` field in a contracts version bump.
-4. **Timezone:** months are Asia/Shanghai. Confirm P2's `GET /transactions?period=` uses the same.
+1. **Outbound transfers count as spending.** They are debits like any other.
+   (`SpendingConfig(excluded_debit_categories=...)` exists if this ever changes.)
+2. **Refunds do not reduce spending.** A refund is a credit, so it is treated as incoming money
+   (like a Taobao/Pinduoduo refund arriving in WeChat Pay) and never touches `total_spending`.
+3. **No `notes` field in the contract for now.** Period-level notes (e.g. "2 credits excluded")
+   stay available via `spending_diagnostics()` and are not part of `SpendingReport`.
+4. **Months use China time (Asia/Shanghai, UTC+8).** P2: please filter
+   `GET /transactions?period=YYYY-MM` by the same rule, so the transaction list and the
+   spending report always match.
 
 All analytics are descriptive, run on synthetic data, and are not financial advice.
