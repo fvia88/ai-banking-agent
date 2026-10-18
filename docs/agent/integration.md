@@ -273,3 +273,52 @@ print("PASS: balance round trip and canonical transfer proposal; no mutations ex
 
 P1 can proceed with a local harness without waiting. Mark unapproved handoff
 choices explicitly and leave all backend changes to P2.
+
+## Task two steps one and two - state groundwork
+
+Added 19 October 2026. This is only the acceptance target and private state
+storage, not a functioning interactive harness or the completed task-two demo.
+No backend, database, global service state, or public DTO changes were made.
+
+Acceptance sequence (existing amount-first order):
+
+| Input | Expected response | State to retain |
+| --- | --- | --- |
+| Transfer to Alice | Ask for amount; no proposal | recipient_text=Alice, awaiting=amount |
+| 500 | Ask which recipient; no proposal | amount=500.00, recipient_text=Alice, awaiting=recipient |
+| Alice Chen | One request_transfer proposal | account_001, recipient_alice, 500.00 CNY |
+
+agent/conversation.py defines private immutable PendingTransfer and
+ConversationState snapshots. The future caller/harness owns their lifetime.
+Fields include conversation_id, original_message, source_account_id, unresolved
+recipient_text, resolved recipient_id, accepted amount, and awaiting. A pending
+name is not a verified recipient ID. Amounts use the shared PositiveMoney type;
+invalid amounts are not accepted into state. The models reject extra fields and
+contradictory clarification states. No parsing or automatic transitions exist yet.
+
+The acceptance test currently supplies snapshots explicitly in the proposed
+context.conversation_state key. The service does not consume that key yet.
+It fails on the second turn as expected; it is marked xfail(strict=True,
+raises=AssertionError), not counted as a passing conversation. A surprising pass
+will make the test suite fail so that the pending marker must be revisited.
+The final proposal assertions are defined but will be reached only after wiring
+the structured context in the next implementation step.
+
+Run state tests and see the pending acceptance target:
+
+```powershell
+$env:PYTHONDONTWRITEBYTECODE = '1'
+agent/.venv/Scripts/python.exe -m pytest -p no:cacheprovider agent/tests/test_conversation_state.py agent/tests/test_conversation_acceptance.py -q -rx
+```
+
+Expected at this stage: 14 passed, 1 xfailed. To inspect the precise unimplemented
+behavior, run the acceptance test with --runxfail; it intentionally fails:
+
+```powershell
+agent/.venv/Scripts/python.exe -m pytest -p no:cacheprovider agent/tests/test_conversation_acceptance.py --runxfail -q
+```
+
+Next: agree machine-readable clarification handling, consume these snapshots,
+and let a caller update state from each turn. Do not infer the missing field by
+parsing English reply templates. Interactive CLI, abandonment, and general
+conversation management are not implemented in these first two steps.
