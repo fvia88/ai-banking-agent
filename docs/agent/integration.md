@@ -274,11 +274,12 @@ print("PASS: balance round trip and canonical transfer proposal; no mutations ex
 P1 can proceed with a local harness without waiting. Mark unapproved handoff
 choices explicitly and leave all backend changes to P2.
 
-## Task two steps one and two - state groundwork
+## Task two structured clarification progress
 
-Added 19 October 2026. This is only the acceptance target and private state
-storage, not a functioning interactive harness or the completed task-two demo.
-No backend, database, global service state, or public DTO changes were made.
+Added 19 October 2026. State storage and the structured clarification connection
+are implemented. The three-turn acceptance test now passes. An interactive CLI
+harness is not connected yet. No backend, database, global service state, or
+public DTO changes were made.
 
 Acceptance sequence (existing amount-first order):
 
@@ -294,31 +295,49 @@ Fields include conversation_id, original_message, source_account_id, unresolved
 recipient_text, resolved recipient_id, accepted amount, and awaiting. A pending
 name is not a verified recipient ID. Amounts use the shared PositiveMoney type;
 invalid amounts are not accepted into state. The models reject extra fields and
-contradictory clarification states. No parsing or automatic transitions exist yet.
+contradictory clarification states.
 
-The acceptance test currently supplies snapshots explicitly in the proposed
-context.conversation_state key. The service does not consume that key yet.
-It fails on the second turn as expected; it is marked xfail(strict=True,
-raises=AssertionError), not counted as a passing conversation. A surprising pass
-will make the test suite fail so that the pending marker must be revisited.
-The final proposal assertions are defined but will be reached only after wiring
-the structured context in the next implementation step.
+The caller supplies snapshots in the proposed context.conversation_state key,
+consistently on all catalog entries. P1's local process_turn helper returns
+ConversationTurn(result=AgentResult, state=ConversationState). The next awaited
+field comes from state.awaiting, not from parsing English replies. P2 may adapt
+this local helper; it is not a new frozen module signature. Canonical
+process_message keeps its original signature and returns only turn.result.
 
-Run state tests and see the pending acceptance target:
+The acceptance test now passes each returned state into the next call rather
+than constructing the expected updated state itself. Initial interpretation uses
+the selected provider. Exact digit amounts and verified recipient-name answers
+are then handled locally for this bounded transfer flow. Invalid answers retain
+the previous accepted state. Account selection/lock, recipient context, money
+constraints and argument schemas are rechecked before producing a proposal.
+The helper returns idle state after producing a proposal so the caller can avoid
+replaying the pending draft. It does not persist proposal/execution records.
+
+Run the state and conversation checks offline:
 
 ```powershell
 $env:PYTHONDONTWRITEBYTECODE = '1'
-agent/.venv/Scripts/python.exe -m pytest -p no:cacheprovider agent/tests/test_conversation_state.py agent/tests/test_conversation_acceptance.py -q -rx
+agent/.venv/Scripts/python.exe -m pytest -p no:cacheprovider agent/tests/test_conversation_state.py agent/tests/test_conversation_acceptance.py agent/tests/test_conversation_turns.py -q
 ```
 
-Expected at this stage: 14 passed, 1 xfailed. To inspect the precise unimplemented
-behavior, run the acceptance test with --runxfail; it intentionally fails:
+Caller pattern (trusted context only):
 
-```powershell
-agent/.venv/Scripts/python.exe -m pytest -p no:cacheprovider agent/tests/test_conversation_acceptance.py --runxfail -q
+```python
+from contracts.models import ChatInput
+from agent.mock_tools import demo_catalog
+from agent.service import process_turn
+
+catalog = demo_catalog()  # Synthetic harness only; production supplies DB context.
+for message in ["Transfer to Alice", "500", "Alice Chen"]:
+    turn = process_turn(ChatInput(conversation_id="demo", message=message), catalog)
+    print(turn.result.model_dump_json())
+    for entry in catalog:
+        entry["context"]["conversation_state"] = turn.state.model_dump(mode="json")
 ```
 
-Next: agree machine-readable clarification handling, consume these snapshots,
-and let a caller update state from each turn. Do not infer the missing field by
-parsing English reply templates. Interactive CLI, abandonment, and general
-conversation management are not implemented in these first two steps.
+Do not mix this state with the legacy clarification_request replay string.
+Mismatched conversation IDs, inconsistent catalog snapshots or a changed source
+account cannot generate a transfer proposal. Only exact numeric amount answers
+and verified names are supported here; general answer paraphrases, corrections,
+interruptions, abandonment and expiry are not implemented. The next step is
+the interactive caller loop. Backend integration still requires P2 agreement.

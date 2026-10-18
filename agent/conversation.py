@@ -1,11 +1,11 @@
 """Private, caller-owned snapshots for the local conversation harness.
 
-Storage only: no database, global state, provider call, parsing or orchestration.
+No database or global state. The caller retains the returned state between turns.
 These are not replacements for the frozen shared request/response models.
 """
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from contracts.models import ID, PositiveMoney
+from contracts.models import ID, PositiveMoney, AgentResult
 
 
 class PendingTransfer(BaseModel):
@@ -35,3 +35,11 @@ class ConversationState(BaseModel):
             if self.awaiting == "recipient" and self.pending_transfer.recipient_id is not None:
                 raise ValueError("A resolved recipient cannot also be missing")
         return self
+
+
+class ConversationTurn(BaseModel):
+    """Private P1 helper output; does not change the public AgentResult DTO."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    result: AgentResult
+    state: ConversationState

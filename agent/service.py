@@ -1,12 +1,25 @@
 """Stateless proposal generation. Contains no execution or persistence code."""
 from decimal import Decimal, InvalidOperation
+from dataclasses import dataclass
 from uuid import uuid4
-from pydantic import ValidationError
+from pydantic import ValidationError, TypeAdapter
 from contracts.models import (ChatInput, AgentResult, ActionProposal, Account,
-                              Recipient, Subscription, SpendingReport, ExecutionResult)
+                              Recipient, Subscription, SpendingReport, ExecutionResult, PositiveMoney)
 from contracts.tool_schemas import validate_tool_arguments
 from .provider import Intent, ProviderError, get_provider
 from .request_guard import is_direct_request
+from .conversation import ConversationState, PendingTransfer, ConversationTurn
+
+
+@dataclass
+class _Progress:
+    state: ConversationState
+
+
+def _transfer_question(progress, draft, field, reply):
+    progress.state = ConversationState(conversation_id=progress.state.conversation_id,
+                                       pending_transfer=draft, awaiting=field)
+    return clarify(reply)
 
 
 def clarify(reply):
@@ -16,14 +29,41 @@ def clarify(reply):
 def process_message(chat: ChatInput, tool_catalog: list[dict],
                     tool_results: list[dict] | None = None) -> AgentResult:
     """Backend-only inputs; see docs/agent/integration.md for local envelopes."""
+    return process_turn(chat, tool_catalog, tool_results).result
+
+
+def process_turn(chat: ChatInput, tool_catalog: list[dict],
+                 tool_results: list[dict] | None = None) -> ConversationTurn:
+    """P1 caller helper: return structured progress without changing shared DTOs.
+
+    The caller supplies context.conversation_state and retains the returned state.
+    No state is stored in this module or inferred from English reply templates.
+    """
+    original = ConversationState(conversation_id=chat.conversation_id)
     try:
-        return _process(ChatInput.model_validate(chat), tool_catalog, tool_results or [])
+        chat = ChatInput.model_validate(chat)
+        snapshots = [entry.get("context", {}).get("conversation_state") for entry in tool_catalog]
+        if snapshots and any(snapshot != snapshots[0] for snapshot in snapshots):
+            raise ValueError("Inconsistent conversation state")
+        if snapshots and snapshots[0] is not None:
+            supplied = ConversationState.model_validate(snapshots[0])
+            if supplied.conversation_id != chat.conversation_id:
+                raise ValueError("Conversation state belongs to a different conversation")
+            original = supplied
+        progress = _Progress(original)
+        result = _process(chat, tool_catalog, tool_results or [], progress)
+        if result.proposals:
+            progress.state = ConversationState(conversation_id=chat.conversation_id)
+        return ConversationTurn(result=result, state=progress.state)
     except (ProviderError, ValidationError, ValueError, TypeError, KeyError,
             AttributeError, InvalidOperation):
-        return AgentResult(reply="I could not safely process this request. No action was executed. Please retry.")
+        return ConversationTurn(
+            result=AgentResult(reply="I could not safely process this request. No action was executed. Please retry."),
+            state=original,
+        )
 
 
-def _process(chat, catalog, results):
+def _process(chat, catalog, results, progress):
     entries = {e["name"]: e for e in catalog}
     if len(entries) != len(catalog):
         raise ValueError("Duplicate tools")
@@ -62,7 +102,37 @@ def _process(chat, catalog, results):
     context = catalog[0].get("context", {}) if catalog else {}
     message = chat.message
     previous = context.get("clarification_request")
-    if previous:
+    pending = progress.state.pending_transfer
+    continuing = pending is not None and progress.state.awaiting is not None
+    if continuing:
+        if previous:
+            raise ValueError("Do not mix structured state with legacy replay")
+        if not is_direct_request(pending.original_message, "transfer"):
+            raise ValueError("Pending request is not an explicit transfer")
+        if progress.state.awaiting == "amount":
+            import re
+            if not re.fullmatch(r"[+-]?\d+(?:\.\d+)?", chat.message.strip()):
+                return clarify("Please answer with a positive CNY amount using digits.")
+            try:
+                accepted_amount = TypeAdapter(PositiveMoney).validate_python(chat.message.strip())
+            except ValidationError:
+                return clarify("Please enter a CNY amount greater than zero with at most two decimal places.")
+            pending = PendingTransfer.model_validate({**pending.model_dump(), "amount": accepted_amount})
+        else:
+            transfer_context = entries.get("request_transfer", {}).get("context", {})
+            choices = [Recipient.model_validate(r) for r in transfer_context.get("recipients", [])]
+            name = chat.message.strip().casefold()
+            matches = [r for r in choices if name in (r.display_name.casefold(), r.display_name.split()[0].casefold())]
+            if len(matches) != 1:
+                return clarify("Please specify the recipient's full name using the app's verified recipient list.")
+            pending = PendingTransfer.model_validate({**pending.model_dump(),
+                "recipient_text": chat.message.strip(), "recipient_id": matches[0].recipient_id})
+        # Exact field answers are handled deterministically; no LLM is needed to
+        # reinterpret the entire request or guess which details should be retained.
+        amount_text = f"{pending.amount:.2f}" if pending.amount is not None else None
+        extracted = Intent(intent="transfer", amount=amount_text, recipient=pending.recipient_text)
+        message = f"Transfer {amount_text or ''} to {pending.recipient_text or ''}"
+    elif previous:
         message = previous + " " + message
         # CLI/backend replays only the pending request, not arbitrary tool prose.
         import re
@@ -71,13 +141,14 @@ def _process(chat, catalog, results):
                 message = re.sub(r"\bto\b.*$", "", previous).strip() + " to " + chat.message
             elif re.fullmatch(r"[+-]?\d+(?:\.\d+)?", chat.message.strip()):
                 message = re.sub(r"^(transfer|send)\b", r"\1 " + chat.message, previous, flags=re.I)
-    extracted = Intent.model_validate_json(get_provider().extract(message))
+    if not continuing:
+        extracted = Intent.model_validate_json(get_provider().extract(message))
     mapping = {"balance": "get_balance", "spending": "analyze_spending",
                "subscriptions": "list_subscriptions", "transfer": "request_transfer",
                "cancel": "request_subscription_cancel"}
     tool = mapping.get(extracted.intent)
     # State-changing intent must be explicit in the original pending/current request.
-    request_text = previous or chat.message
+    request_text = pending.original_message if continuing else (previous or chat.message)
     if extracted.intent == "transfer" and not is_direct_request(request_text, "transfer"):
         return clarify("Please explicitly request the transfer and its exact amount and recipient.")
     if extracted.intent == "cancel" and not is_direct_request(request_text, "cancel"):
@@ -93,6 +164,8 @@ def _process(chat, catalog, results):
         if len(accounts) != 1:
             return clarify("Please select a source account through the app.")
         args["source_account_id" if extracted.intent == "transfer" else "account_id"] = accounts[0]
+        if continuing and pending.source_account_id != accounts[0]:
+            raise ValueError("Selected source account changed during clarification")
     if extracted.intent in ("transfer", "cancel") and context.get("account_locked", False):
         return AgentResult(reply="This account is locked. No state-changing proposal was created.")
     if extracted.intent == "spending":
@@ -100,27 +173,36 @@ def _process(chat, catalog, results):
             return clarify("Which month? Please use YYYY-MM.")
         args["period"] = extracted.period
     if extracted.intent == "transfer":
+        recipient_text = extracted.recipient
+        if recipient_text and recipient_text.casefold() not in message.casefold():
+            raise ValueError("Ungrounded recipient")
+        draft = PendingTransfer(
+            original_message=request_text, source_account_id=args["source_account_id"],
+            recipient_text=recipient_text,
+        )
         if not extracted.amount:
-            return clarify("How much CNY would you like to transfer?")
+            return _transfer_question(progress, draft, "amount", "How much CNY would you like to transfer?")
         try:
             amount = Decimal(extracted.amount)
         except InvalidOperation:
-            return clarify("Please enter a valid CNY transfer amount greater than zero.")
+            return _transfer_question(progress, draft, "amount", "Please enter a valid CNY transfer amount greater than zero.")
         if not amount.is_finite() or amount <= 0:
-            return clarify("The transfer amount must be greater than zero. How much CNY would you like to transfer?")
-        if not extracted.recipient:
-            return clarify("Who should receive the transfer?")
+            return _transfer_question(progress, draft, "amount", "The transfer amount must be greater than zero. How much CNY would you like to transfer?")
         # Fail closed if the model invents an amount absent from the user request.
         import re
         amounts = re.findall(r"(?<!\w)[+-]?\d+(?:\.\d+)?", message)
         if amount not in [Decimal(a) for a in amounts]:
             raise ValueError("Ungrounded amount")
+        amount = TypeAdapter(PositiveMoney).validate_python(amount)
+        draft = PendingTransfer.model_validate({**draft.model_dump(), "amount": amount})
+        if not extracted.recipient:
+            return _transfer_question(progress, draft, "recipient", "Who should receive the transfer?")
         recipients = [Recipient.model_validate(r) for r in context.get("recipients", [])]
         name = extracted.recipient.casefold()
         matches = [r for r in recipients if name == r.display_name.casefold() or
                    name == r.display_name.split()[0].casefold()]
         if len(matches) != 1:
-            return clarify("Please specify the recipient's full name using the app's verified recipient list.")
+            return _transfer_question(progress, draft, "recipient", "Please specify the recipient's full name using the app's verified recipient list.")
         if name not in message.casefold():
             raise ValueError("Ungrounded recipient")
         args.update(recipient_id=matches[0].recipient_id, amount=extracted.amount, currency="CNY")
