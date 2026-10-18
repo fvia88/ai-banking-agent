@@ -339,11 +339,17 @@ Do not mix this state with the legacy clarification_request replay string.
 Mismatched conversation IDs, inconsistent catalog snapshots or a changed source
 account cannot generate a transfer proposal. Only exact numeric amount answers
 and verified names are supported here; general answer paraphrases, corrections,
-interruptions, abandonment and expiry are not implemented. The interactive
+request switching and expiry are not implemented. Standalone never mind/nevermind
+now returns a cleared state and no proposals, without a provider call. This only
+discards an unfinished local draft; it is not execution/action cancellation.
+The caller must save the returned cleared snapshot before the next message.
+Commands embedded in longer text or quotes are not recognized as abandonment,
+and an incoming tool result is never swallowed by an abandonment command.
+The interactive
 caller loop now runs with python -m agent.cli --interactive (mock by default).
 It prints replies/proposals and state, persists the returned snapshot only in
 its in-memory catalog, and exits cleanly on quit, Ctrl+C or end-of-input.
 Existing single-message CLI commands are preserved. Interactive mode does not
 execute lookups or mutations and does not interpret ok as approval.
 Backend integration still requires P2 agreement. Next is the separate task
-for abandoning pending requests with never mind.
+for interleaved conversation-isolation verification.

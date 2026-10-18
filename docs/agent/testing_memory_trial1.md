@@ -126,5 +126,28 @@ does not catch those exceptions.
 
 Memory exists only while this demo process runs; there is no database storage.
 This trial supports a pending transfer with numeric amount answers and verified
-recipient-name answers. General corrections, interruptions, and `never mind`
-handling are not implemented yet.
+recipient-name answers. General corrections and request switching are not
+implemented yet. Standalone `never mind` / `nevermind` now discards a pending draft.
+
+## Trial 2 - discard an unfinished request
+
+Start the built-in interactive command again, then type:
+
+```text
+Transfer to Alice
+500
+never mind
+Transfer 300 to Bob
+quit
+```
+
+After `never mind`, expect `Unfinished request discarded.`, no proposals, and
+state with pending_transfer=null and awaiting=null. The next request should
+propose 300.00 CNY to recipient_bob; it must not reuse Alice or 500.00.
+
+Abandonment is local and does not require Gemini. Matching is case-insensitive
+and permits trailing sentence punctuation. Only a standalone command clears
+the draft; quoted words or an embedded phrase are not an abandonment command.
+The caller must retain the cleared returned state. This does not revoke a
+proposal already handed to a backend or cancel an executed banking operation.
+If no unfinished draft exists, the reply says so instead of claiming cancellation.

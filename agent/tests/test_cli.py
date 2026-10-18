@@ -69,3 +69,13 @@ def test_existing_single_message_read_still_works(capsys):
 def test_default_single_message_still_proposes_balance(capsys):
     cli.main([])
     assert '"tool": "get_balance"' in capsys.readouterr().out
+
+
+def test_interactive_abandonment_then_fresh_request(monkeypatch, capsys):
+    answers(monkeypatch, ["Transfer to Alice", "500", "never mind", "Transfer 300 to Bob", "quit"])
+    cli.main(["--interactive"])
+    output = capsys.readouterr().out
+    assert "Unfinished request discarded." in output
+    assert '"recipient_id": "recipient_bob"' in output
+    assert '"amount": "300.00"' in output
+    assert '"recipient_id": "recipient_alice"' not in output

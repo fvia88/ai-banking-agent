@@ -50,6 +50,15 @@ def process_turn(chat: ChatInput, tool_catalog: list[dict],
             if supplied.conversation_id != chat.conversation_id:
                 raise ValueError("Conversation state belongs to a different conversation")
             original = supplied
+        # A standalone abandonment command concerns the local unfinished draft,
+        # not approval, execution, or subscription cancellation. Do not swallow
+        # an execution result if this call is actually processing tool results.
+        command = chat.message.strip().casefold().rstrip(".!?").strip()
+        if not tool_results and command in {"never mind", "nevermind"}:
+            reply = ("Unfinished request discarded." if original.pending_transfer is not None
+                     else "There is no unfinished request to discard.")
+            return ConversationTurn(result=AgentResult(reply=reply),
+                                    state=ConversationState(conversation_id=chat.conversation_id))
         progress = _Progress(original)
         result = _process(chat, tool_catalog, tool_results or [], progress)
         if result.proposals:
