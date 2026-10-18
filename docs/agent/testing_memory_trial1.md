@@ -6,6 +6,30 @@ No API key is needed. No transfers or cancellations execute.
 
 ## Start the trial
 
+The memory loop is now built into the CLI. From the repository root, run:
+
+```powershell
+agent/.venv/Scripts/python.exe -m agent.cli --interactive
+```
+
+Then type `Transfer to Alice`, `500`, and `Alice Chen` one at a time. The
+expected results below apply. Type `quit`, press Ctrl+C, or end input to exit
+cleanly. The old pasted block below is retained as an explanatory alternative;
+you no longer need to paste it to run the trial.
+
+To use Gemini for the initial request instead of mock interpretation:
+
+```powershell
+agent/.venv/Scripts/python.exe -m agent.cli --interactive --provider gemini
+```
+
+That requires your configured key and API access. Exact amount/name answers
+still use local clarification logic. Interactive mode does not support
+`--clarify`, `--resolve-read`, or a positional starting message; it never executes
+tools or confirms proposals.
+
+## Original pasted-loop alternative
+
 Open PowerShell in the repository root:
 
 ```text
@@ -96,7 +120,9 @@ The proposal ID is generated at runtime and will differ between runs.
 
 ## Exit and limitations
 
-Type `quit` to exit. Start the block again for a fresh trial.
+Type `quit` to exit. Start the interactive command again for a fresh trial.
+The built-in CLI handles Ctrl+C/end-of-input cleanly; the original raw block
+does not catch those exceptions.
 
 Memory exists only while this demo process runs; there is no database storage.
 This trial supports a pending transfer with numeric amount answers and verified

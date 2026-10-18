@@ -277,8 +277,8 @@ choices explicitly and leave all backend changes to P2.
 ## Task two structured clarification progress
 
 Added 19 October 2026. State storage and the structured clarification connection
-are implemented. The three-turn acceptance test now passes. An interactive CLI
-harness is not connected yet. No backend, database, global service state, or
+are implemented. The three-turn acceptance test now passes. The CLI now exposes
+this loop through --interactive. No backend, database, global service state, or
 public DTO changes were made.
 
 Acceptance sequence (existing amount-first order):
@@ -339,5 +339,11 @@ Do not mix this state with the legacy clarification_request replay string.
 Mismatched conversation IDs, inconsistent catalog snapshots or a changed source
 account cannot generate a transfer proposal. Only exact numeric amount answers
 and verified names are supported here; general answer paraphrases, corrections,
-interruptions, abandonment and expiry are not implemented. The next step is
-the interactive caller loop. Backend integration still requires P2 agreement.
+interruptions, abandonment and expiry are not implemented. The interactive
+caller loop now runs with python -m agent.cli --interactive (mock by default).
+It prints replies/proposals and state, persists the returned snapshot only in
+its in-memory catalog, and exits cleanly on quit, Ctrl+C or end-of-input.
+Existing single-message CLI commands are preserved. Interactive mode does not
+execute lookups or mutations and does not interpret ok as approval.
+Backend integration still requires P2 agreement. Next is the separate task
+for abandoning pending requests with never mind.

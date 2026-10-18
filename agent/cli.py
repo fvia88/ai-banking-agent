@@ -1,21 +1,56 @@
 import argparse
 import os
 from contracts.models import ChatInput
-from .service import process_message
+from pydantic import ValidationError
+from .service import process_message, process_turn
 from .mock_tools import demo_catalog, read_result
 
 
-def main():
+def _interactive(catalog):
+    print("Type a message, or quit to exit. Proposals do not execute or confirm actions.")
+    while True:
+        try:
+            message = input("\nYou: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nMemory demo ended.")
+            return
+        if message.casefold() == "quit":
+            print("Memory demo ended.")
+            return
+        if not message:
+            continue
+        try:
+            chat = ChatInput(conversation_id="interactive_demo", message=message)
+        except ValidationError:
+            print("Please enter a message of 1 to 4000 characters. Pending details were retained.")
+            continue
+        try:
+            turn = process_turn(chat, catalog)
+        except KeyboardInterrupt:
+            print("\nMemory demo ended.")
+            return
+        print(turn.result.model_dump_json(indent=2))
+        print("Remembered state:", turn.state.model_dump_json())
+        for entry in catalog:
+            entry["context"]["conversation_state"] = turn.state.model_dump(mode="json")
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(description="Synthetic banking agent demo; no mutations")
-    parser.add_argument("message", nargs="?", default="What is my balance?")
+    parser.add_argument("message", nargs="?", default=None)
     parser.add_argument("--provider", choices=["mock", "gemini"], default="mock")
     parser.add_argument("--clarify", help="Follow-up answer; CLI supplies prior request explicitly")
     parser.add_argument("--resolve-read", action="store_true")
-    args = parser.parse_args()
+    parser.add_argument("--interactive", action="store_true", help="Run the in-memory conversation demo")
+    args = parser.parse_args(argv)
+    if args.interactive and (args.message is not None or args.clarify is not None or args.resolve_read):
+        parser.error("--interactive cannot be combined with message, --clarify, or --resolve-read")
     os.environ["AGENT_PROVIDER"] = args.provider
     print(f"SYNTHETIC DEMO | provider={args.provider}")
     catalog = demo_catalog()
-    chat = ChatInput(conversation_id="demo", message=args.message)
+    if args.interactive:
+        return _interactive(catalog)
+    chat = ChatInput(conversation_id="demo", message=args.message or "What is my balance?")
     result = process_message(chat, catalog)
     print(result.model_dump_json(indent=2))
     if args.clarify and result.needs_clarification:
