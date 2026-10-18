@@ -352,4 +352,14 @@ its in-memory catalog, and exits cleanly on quit, Ctrl+C or end-of-input.
 Existing single-message CLI commands are preserved. Interactive mode does not
 execute lookups or mutations and does not interpret ok as approval.
 Backend integration still requires P2 agreement. Next is the separate task
-for interleaved conversation-isolation verification.
+for the tool-result round trip and stronger matching against original proposals.
+
+### Conversation-isolation verification
+
+Task four passed with no runtime changes required. Interleaved tests cover
+500.00 to Alice Chen versus 300.00 to Alice Wang, both completion orders,
+abandonment in only one conversation, foreign snapshot rejection and inconsistent
+catalog snapshots. The tests assert that caller-owned context is not mutated.
+See testing_memory_trial1.md for the terminal command and expected outcomes.
+P2 remains responsible for authenticated user/conversation ownership; matching
+conversation IDs alone is not an authorization boundary.

@@ -151,3 +151,32 @@ the draft; quoted words or an embedded phrase are not an abandonment command.
 The caller must retain the cleared returned state. This does not revoke a
 proposal already handed to a backend or cancel an executed banking operation.
 If no unfinished draft exists, the reply says so instead of claiming cancellation.
+
+## Trial 3 - conversation isolation
+
+The interactive CLI demonstrates one conversation per process. To verify two
+conversations interleaved in the same process, run the automated checks:
+
+```powershell
+agent/.venv/Scripts/python.exe -m pytest -p no:cacheprovider agent/tests/test_conversation_turns.py -q -k 'interleaved or abandonment_in_one or foreign_snapshot or mixed_catalog'
+```
+
+Expected: 5 passed. The other tests in that file are deselected by this filter.
+
+The main scenario alternates:
+
+| Conversation A | Conversation B |
+| --- | --- |
+| Transfer 500 to Alice | Transfer to Alice |
+| Waits for a full name | 300; then waits for a full name |
+| Alice Chen -> 500.00 to recipient_alice | Alice Wang -> 300.00 to recipient_alice_2 |
+
+Both completion orders are tested. Completing or discarding A must not change B.
+A snapshot with the wrong conversation ID, or mixed snapshots across catalog
+entries, must not produce a proposal. Rejected input must not mutate caller-owned
+context. The caller keeps a separate catalog/state snapshot for each conversation.
+
+This verifies in-process state isolation, not authentication or production
+cross-user authorization. P2 must bind stored conversations to authenticated
+users and use the correct snapshot when handling each request. No database,
+backend code, live Gemini calls, or banking execution are involved in these tests.

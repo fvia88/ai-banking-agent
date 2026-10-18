@@ -135,3 +135,86 @@ def test_abandonment_after_proposal_does_not_claim_action_cancellation(monkeypat
     assert result.result.reply == "There is no unfinished request to discard."
     assert not result.result.proposals
     assert proposed.result.proposals[0].model_dump(mode="json") == proposal
+
+
+@pytest.mark.parametrize("first_to_finish", ["conversation_a", "conversation_b"])
+def test_interleaved_conversations_retain_their_own_amount_and_recipient(monkeypatch, first_to_finish):
+    monkeypatch.setenv("AGENT_PROVIDER", "mock")
+    catalogs = {name: demo_catalog() for name in ["conversation_a", "conversation_b"]}
+    def send(name, message):
+        turn = service.process_turn(ChatInput(conversation_id=name, message=message), catalogs[name])
+        supply(catalogs[name], turn.state)
+        return turn
+
+    a = send("conversation_a", "Transfer 500 to Alice")
+    b = send("conversation_b", "Transfer to Alice")
+    assert a.state.awaiting == "recipient" and not a.result.proposals
+    assert b.state.awaiting == "amount" and not b.result.proposals
+    b = send("conversation_b", "300")
+    assert b.state.awaiting == "recipient" and not b.result.proposals
+
+    choices = {
+        "conversation_a": ("Alice Chen", "recipient_alice", "500.00"),
+        "conversation_b": ("Alice Wang", "recipient_alice_2", "300.00"),
+    }
+    second = next(name for name in catalogs if name != first_to_finish)
+    untouched = deepcopy(catalogs[second])
+    for name in [first_to_finish, second]:
+        recipient, recipient_id, amount = choices[name]
+        turn = send(name, recipient)
+        assert len(turn.result.proposals) == 1
+        assert turn.result.proposals[0].arguments == {
+            "source_account_id": "account_001", "recipient_id": recipient_id,
+            "amount": amount, "currency": "CNY",
+        }
+        assert turn.state.conversation_id == name
+        assert turn.state.pending_transfer is None
+        if name == first_to_finish:
+            assert catalogs[second] == untouched
+
+
+def test_abandonment_in_one_conversation_preserves_the_other(monkeypatch):
+    monkeypatch.setenv("AGENT_PROVIDER", "mock")
+    a_catalog, b_catalog = demo_catalog(), demo_catalog()
+    a = service.process_turn(ChatInput(conversation_id="a", message="Transfer to Alice"), a_catalog)
+    b = service.process_turn(ChatInput(conversation_id="b", message="Transfer 300 to Alice"), b_catalog)
+    supply(a_catalog, a.state)
+    supply(b_catalog, b.state)
+    saved_b = deepcopy(b_catalog)
+    discarded = service.process_turn(ChatInput(conversation_id="a", message="never mind"), a_catalog)
+    supply(a_catalog, discarded.state)
+    assert discarded.state.pending_transfer is None and not discarded.result.proposals
+    assert b_catalog == saved_b
+    completed_b = service.process_turn(ChatInput(conversation_id="b", message="Alice Wang"), b_catalog)
+    assert completed_b.result.proposals[0].arguments["recipient_id"] == "recipient_alice_2"
+    assert completed_b.result.proposals[0].arguments["amount"] == "300.00"
+    late_a = service.process_turn(ChatInput(conversation_id="a", message="500"), a_catalog)
+    assert not late_a.result.proposals and late_a.state.pending_transfer is None
+
+
+def test_foreign_snapshot_is_rejected_without_exposing_or_mutating_it(monkeypatch):
+    monkeypatch.setenv("AGENT_PROVIDER", "mock")
+    owner_catalog = demo_catalog()
+    owner = service.process_turn(ChatInput(conversation_id="owner", message="Transfer 700 to Alice"), owner_catalog)
+    supply(owner_catalog, owner.state)
+    before = deepcopy(owner_catalog)
+    wrong_route = service.process_turn(ChatInput(conversation_id="other", message="Alice Chen"), owner_catalog)
+    assert not wrong_route.result.proposals
+    assert wrong_route.state.conversation_id == "other" and wrong_route.state.pending_transfer is None
+    assert "700" not in wrong_route.result.reply
+    assert owner_catalog == before
+    resumed = service.process_turn(ChatInput(conversation_id="owner", message="Alice Chen"), owner_catalog)
+    assert resumed.result.proposals[0].arguments["amount"] == "700.00"
+
+
+def test_mixed_catalog_snapshots_cannot_cross_conversations(monkeypatch):
+    monkeypatch.setenv("AGENT_PROVIDER", "mock")
+    catalog_a, catalog_b = demo_catalog(), demo_catalog()
+    a = service.process_turn(ChatInput(conversation_id="a", message="Transfer 500 to Alice"), catalog_a)
+    b = service.process_turn(ChatInput(conversation_id="b", message="Transfer 300 to Alice"), catalog_b)
+    supply(catalog_a, a.state)
+    catalog_a[-1]["context"]["conversation_state"] = b.state.model_dump(mode="json")
+    before = deepcopy(catalog_a)
+    mixed = service.process_turn(ChatInput(conversation_id="a", message="Alice Chen"), catalog_a)
+    assert not mixed.result.proposals and mixed.state.pending_transfer is None
+    assert catalog_a == before
