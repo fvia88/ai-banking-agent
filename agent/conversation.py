@@ -5,7 +5,8 @@ These are not replacements for the frozen shared request/response models.
 """
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from contracts.models import ID, PositiveMoney, AgentResult
+from contracts.models import ID, PositiveMoney, AgentResult, ActionProposal
+from contracts.tool_schemas import validate_tool_arguments
 
 
 class PendingTransfer(BaseModel):
@@ -18,15 +19,30 @@ class PendingTransfer(BaseModel):
     amount: PositiveMoney | None = None  # Accepted amount; invalid input is not stored.
 
 
+class PendingToolRequest(BaseModel):
+    """Original canonical proposal retained by the trusted caller, not the LLM."""
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    proposal: ActionProposal
+
+    @model_validator(mode="after")
+    def canonical_arguments_required(self):
+        validate_tool_arguments(self.proposal.tool, self.proposal.arguments)
+        return self
+
+
 class ConversationState(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     conversation_id: ID
     pending_transfer: PendingTransfer | None = None
     awaiting: Literal["amount", "recipient"] | None = None
+    pending_tool_requests: tuple[PendingToolRequest, ...] = ()
 
     @model_validator(mode="after")
     def clarification_requires_pending_transfer(self):
+        ids = [request.proposal.proposal_id for request in self.pending_tool_requests]
+        if len(ids) != len(set(ids)):
+            raise ValueError("Duplicate pending proposal IDs")
         if self.awaiting is not None and self.pending_transfer is None:
             raise ValueError("A clarification field requires a pending transfer")
         if self.pending_transfer:

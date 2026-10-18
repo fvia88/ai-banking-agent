@@ -4,6 +4,7 @@ from contracts.models import ChatInput
 from pydantic import ValidationError
 from .service import process_message, process_turn
 from .mock_tools import demo_catalog, read_result
+from .conversation import ConversationState, PendingToolRequest
 
 
 def _interactive(catalog):
@@ -65,9 +66,14 @@ def main(argv=None):
             print("Execution unavailable: this CLI never transfers or cancels.")
             return
         for entry in catalog:
-            entry["context"]["pending_proposal_ids"] = [proposal.proposal_id]
-        result = process_message(chat, catalog, [read_result(chat, proposal)])
-        print(result.model_dump_json(indent=2))
+            entry["context"]["conversation_state"] = ConversationState(
+                conversation_id=chat.conversation_id,
+                pending_tool_requests=(PendingToolRequest(proposal=proposal.model_copy(deep=True)),),
+            ).model_dump(mode="json")
+        turn = process_turn(chat, catalog, [read_result(chat, proposal)])
+        for entry in catalog:
+            entry["context"]["conversation_state"] = turn.state.model_dump(mode="json")
+        print(turn.result.model_dump_json(indent=2))
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ from contracts.models import (ChatInput, AgentResult, ActionProposal, Account,
 from contracts.tool_schemas import validate_tool_arguments
 from .provider import Intent, ProviderError, get_provider
 from .request_guard import is_direct_request
-from .conversation import ConversationState, PendingTransfer, ConversationTurn
+from .conversation import ConversationState, PendingTransfer, ConversationTurn, PendingToolRequest
 
 
 @dataclass
@@ -18,7 +18,8 @@ class _Progress:
 
 def _transfer_question(progress, draft, field, reply):
     progress.state = ConversationState(conversation_id=progress.state.conversation_id,
-                                       pending_transfer=draft, awaiting=field)
+                                       pending_transfer=draft, awaiting=field,
+                                       pending_tool_requests=progress.state.pending_tool_requests)
     return clarify(reply)
 
 
@@ -58,11 +59,14 @@ def process_turn(chat: ChatInput, tool_catalog: list[dict],
             reply = ("Unfinished request discarded." if original.pending_transfer is not None
                      else "There is no unfinished request to discard.")
             return ConversationTurn(result=AgentResult(reply=reply),
-                                    state=ConversationState(conversation_id=chat.conversation_id))
+                                    state=ConversationState(conversation_id=chat.conversation_id,
+                                        pending_tool_requests=original.pending_tool_requests))
         progress = _Progress(original)
         result = _process(chat, tool_catalog, tool_results or [], progress)
         if result.proposals:
-            progress.state = ConversationState(conversation_id=chat.conversation_id)
+            progress.state = ConversationState(conversation_id=chat.conversation_id,
+                pending_tool_requests=(*progress.state.pending_tool_requests,
+                    *(PendingToolRequest(proposal=p.model_copy(deep=True)) for p in result.proposals)))
         return ConversationTurn(result=result, state=progress.state)
     except (ProviderError, ValidationError, ValueError, TypeError, KeyError,
             AttributeError, InvalidOperation):
@@ -84,27 +88,50 @@ def _process(chat, catalog, results, progress):
         tool = result["tool"]
         entry = entries[tool]
         context = entry.get("context", {})
-        if (result["conversation_id"] != chat.conversation_id or
-                result["proposal_id"] not in context.get("pending_proposal_ids", [])):
+        pending = next((request for request in progress.state.pending_tool_requests
+                        if request.proposal.proposal_id == result["proposal_id"]), None)
+        if result["conversation_id"] != chat.conversation_id or pending is None:
             raise ValueError("Uncorrelated result")
+        if tool != pending.proposal.tool.value:
+            raise ValueError("Result tool does not match original proposal")
+        expected = validate_tool_arguments(tool, pending.proposal.arguments)
+        echoed = validate_tool_arguments(tool, result["arguments"])
+        if expected.model_dump() != echoed.model_dump():
+            raise ValueError("Result arguments do not match original proposal")
+        account_id = getattr(expected, "account_id", getattr(expected, "source_account_id", None))
+        if account_id is not None and account_id not in context.get("account_ids", []):
+            raise ValueError("Requested account no longer available")
+        if result["status"] not in {"success", "error"}:
+            raise ValueError("Unknown tool result status")
+        def accept(reply):
+            # Caller must retain this returned state to make consumption effective.
+            progress.state = ConversationState.model_validate({**progress.state.model_dump(),
+                "pending_tool_requests": [request.model_dump() for request in progress.state.pending_tool_requests
+                                          if request.proposal.proposal_id != result["proposal_id"]]})
+            return AgentResult(reply=reply)
         if result["status"] != "success":
-            return AgentResult(reply="The tool did not complete successfully. No success is confirmed.")
+            return accept("The tool did not complete successfully. No success is confirmed.")
         data = result["data"]
         if tool == "get_balance":
             account = Account.model_validate(data)
-            if account.account_id not in context.get("account_ids", []):
-                raise ValueError("Unknown account")
-            return AgentResult(reply=f"Verified balance: CNY {account.balance:.2f}.")
+            if account.account_id != expected.account_id:
+                raise ValueError("Result account differs from requested account")
+            return accept(f"Verified balance: CNY {account.balance:.2f}.")
         if tool == "analyze_spending":
             report = SpendingReport.model_validate(data)
-            return AgentResult(reply=f"Verified spending for {report.period}: CNY {report.total_spending:.2f}.")
+            if report.period != expected.period:
+                raise ValueError("Result month differs from requested month")
+            return accept(f"Verified spending for {report.period}: CNY {report.total_spending:.2f}.")
         if tool == "list_subscriptions":
             from contracts.models import SubscriptionReport
             report = SubscriptionReport.model_validate(data)
-            return AgentResult(reply=f"Found {len(report.candidates)} recurring-charge candidates. These are not proof of active subscriptions.")
+            return accept(f"Found {len(report.candidates)} recurring-charge candidates. These are not proof of active subscriptions.")
         execution = ExecutionResult.model_validate(data)
         if execution.status.value == "COMPLETED":
-            return AgentResult(reply=f"The backend confirmed completion. Action ID: {execution.action_id}.")
+            return accept(f"The backend confirmed completion. Action ID: {execution.action_id}.")
+        # Nonterminal execution outcomes must remain pending for a later update.
+        if execution.status.value in {"REJECTED", "FAILED", "CANCELLED"}:
+            return accept(f"Backend action status: {execution.status.value}. Completion is not confirmed.")
         return AgentResult(reply=f"Backend action status: {execution.status.value}. Completion is not confirmed.")
 
     # Context is supplied by the backend, never inferred from fixture/global state.

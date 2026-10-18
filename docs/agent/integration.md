@@ -35,7 +35,6 @@ models. Never forward client-supplied catalog/context directly to the agent.
     "account_locked": false,
     "recipients": [],
     "subscriptions": [],
-    "pending_proposal_ids": [],
     "clarification_request": "Transfer 500 to Alice"
   }
 }
@@ -58,6 +57,7 @@ Pass one result at a time, from trusted backend orchestration only:
   "conversation_id": "demo",
   "proposal_id": "the-original-proposal-id",
   "tool": "get_balance",
+  "arguments": {"account_id": "account_001"},
   "status": "success",
   "data": {
     "account_id": "account_001", "user_id": "user_001",
@@ -66,13 +66,17 @@ Pass one result at a time, from trusted backend orchestration only:
 }
 ```
 
-The corresponding catalog context must contain that proposal ID in
-pending_proposal_ids. Other statuses produce a failure reply. Data models are
+The corresponding context.conversation_state.pending_tool_requests must contain
+the full original canonical proposal. A pending ID list alone is no longer
+accepted. The result must echo the original typed arguments, conversation and
+tool. Envelope status is success or error. Data models for successful results are
 Account, SpendingReport, SubscriptionReport, or ExecutionResult respectively.
-The backend must verify correlation to the original exact tool/arguments,
-authenticated owner, and current conversation before providing the envelope.
-The agent's membership checks are not authentication or execution authorization.
-Remove consumed pending IDs in backend state. A COMPLETED ExecutionResult is
+The backend must authenticate the owner and obtain the result from the correct
+actual tool execution. Echoed arguments do not authenticate a result or prove
+which data was queried. P1 checks the recorded request and the returned
+account/month where the shared data model carries those fields. Save the returned
+state to remove consumed requests; retaining stale snapshots permits replay.
+A COMPLETED ExecutionResult is
 the only mutation result that produces a completion statement. Raw returned
 messages, merchant names, notes, anomaly prose, and provider replies are not
 used as instructions or echoed into completion claims.
@@ -114,8 +118,8 @@ keeps this check separate from a persistent demo database.
 | --- | --- |
 | ChatInput, AgentResult, ActionProposal and typed tool arguments | Frozen shared v1.0.0 models |
 | Tool entry with name, parameters and context | Proposed P1-to-P2 convention |
-| account_ids, recipients, subscriptions and pending_proposal_ids context fields | Proposed convention, supplied by trusted caller |
-| conversation_id/proposal_id/tool/status/data tool-result envelope | Proposed convention |
+| account_ids, recipients, subscriptions and conversation_state context fields | Proposed convention, supplied by trusted caller |
+| conversation_id/proposal_id/tool/arguments/status/data tool-result envelope | Proposed convention |
 | clarification_request string | Existing limited replay convention, not complete multi-turn state |
 
 The catalog is not an OpenAI-style type/function wrapper and is not sent directly
@@ -141,7 +145,12 @@ For illustration, this is the context attached to each entry:
     }
   ],
   "subscriptions": [],
-  "pending_proposal_ids": []
+  "conversation_state": {
+    "conversation_id": "handoff_balance",
+    "pending_transfer": null,
+    "awaiting": null,
+    "pending_tool_requests": []
+  }
 }
 ```
 
@@ -171,8 +180,8 @@ illustrative; runtime generates a UUID):
 }
 ```
 
-P2 checks ownership, performs the read, retains the original proposal, and sets
-pending_proposal_ids to include its actual proposal ID in caller-owned context.
+P2 checks ownership, performs the read, and retains process_turn's returned state
+including the original proposal in pending_tool_requests in caller-owned context.
 Then P2 calls process_message(chat, catalog, [result]) with:
 
 ```json
@@ -180,6 +189,7 @@ Then P2 calls process_message(chat, catalog, [result]) with:
   "conversation_id": "handoff_balance",
   "proposal_id": "example_balance_proposal",
   "tool": "get_balance",
+  "arguments": {"account_id": "account_001"},
   "status": "success",
   "data": {
     "account_id": "account_001",
@@ -192,10 +202,9 @@ Then P2 calls process_message(chat, catalog, [result]) with:
 ```
 
 Expected reply: "Verified balance: CNY 5000.00." with proposals=[] and
-needs_clarification=false. Backend must correlate the tool and exact arguments
-against the stored original request; current agent membership checks alone do
-not establish that correlation. Consume/clear pending state in the caller after
-handling a result. Do not require transfer confirmation for this read-only tool.
+needs_clarification=false. The original request, echoed arguments and returned
+account must match. Save process_turn's returned state to consume the accepted
+result. Do not require transfer confirmation for this read-only tool.
 
 ### Example C - canonical transfer proposal
 
@@ -236,20 +245,24 @@ import os
 from contracts.models import ChatInput
 from contracts.tool_schemas import validate_tool_arguments
 from agent.mock_tools import demo_catalog, read_result
-from agent.service import process_message
+from agent.service import process_message, process_turn
 
 os.environ["AGENT_PROVIDER"] = "mock"
 catalog = demo_catalog()  # Generates all five schemas and synthetic context.
 chat = ChatInput(conversation_id="handoff_balance", message="What is my balance?")
-initial = process_message(chat, catalog)
+initial_turn = process_turn(chat, catalog)
+initial = initial_turn.result
 assert len(initial.proposals) == 1
 proposal = initial.proposals[0]
 assert proposal.tool.value == "get_balance"
 validate_tool_arguments(proposal.tool, proposal.arguments)
 for entry in catalog:
-    entry["context"]["pending_proposal_ids"] = [proposal.proposal_id]
+    entry["context"]["conversation_state"] = initial_turn.state.model_dump(mode="json")
 result = read_result(chat, proposal)  # Synthetic Account data, not a DB call.
-final = process_message(chat, catalog, [result])
+final_turn = process_turn(chat, catalog, [result])
+final = final_turn.result
+for entry in catalog:
+    entry["context"]["conversation_state"] = final_turn.state.model_dump(mode="json")
 assert final.reply == "Verified balance: CNY 5000.00."
 assert not final.proposals
 
@@ -352,7 +365,7 @@ its in-memory catalog, and exits cleanly on quit, Ctrl+C or end-of-input.
 Existing single-message CLI commands are preserved. Interactive mode does not
 execute lookups or mutations and does not interpret ok as approval.
 Backend integration still requires P2 agreement. Next is the separate task
-for the tool-result round trip and stronger matching against original proposals.
+for final regression/live checks and meeting preparation.
 
 ### Conversation-isolation verification
 
@@ -363,3 +376,35 @@ catalog snapshots. The tests assert that caller-owned context is not mutated.
 See testing_memory_trial1.md for the terminal command and expected outcomes.
 P2 remains responsible for authenticated user/conversation ownership; matching
 conversation IDs alone is not an authorization boundary.
+
+## Task five - original proposal matching and consumption
+
+This strengthens the local proposed handoff convention; shared contracts remain
+v1.0.0. P2 must explicitly adopt it when integrating. The local caller uses
+process_turn to retain both public AgentResult and returned ConversationState.
+The public process_message signature and AgentResult fields remain unchanged.
+
+- Each new proposal is copied into state.pending_tool_requests as
+  PendingToolRequest(proposal=the_original_ActionProposal). Arguments are checked
+  against the shared tool model before they are retained.
+- read_result in mock_tools now echoes validated arguments in its envelope.
+- P1 requires matching conversation, saved proposal ID, tool and canonical
+  arguments. Missing original proposal or missing echoed arguments is rejected.
+- Account data must identify the exact requested account, not merely any account
+  in the user's allowed list. SpendingReport.period must equal the requested month.
+- SubscriptionReport and SpendingReport do not carry account IDs themselves.
+  P1 checks the saved/echoed account; the trusted backend must ensure actual data
+  was queried only for that account and authenticated user.
+- Accepted read results and error outcomes consume only their own request.
+  Terminal execution outcomes consume it too; pending confirmation/MFA outcomes
+  retain it. Backend must bind mutation execution records to their original
+  proposal and action ID; this local stub does not execute or authorize mutations.
+- Validation rejection does not consume the request, allowing a corrected result.
+  Already-consumed results are rejected after the caller saves returned state.
+- Unfinished-draft abandonment preserves issued pending proposals. It is not
+  revocation of a backend action or permission to ignore later execution outcomes.
+
+CLI --resolve-read uses this round trip with fixtures. Interactive mode remains
+proposal-only; it does not execute tools. No backend imports or database writes
+were added. Replay protection here is sequential, in-memory caller bookkeeping,
+not an atomic production idempotency mechanism.

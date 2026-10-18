@@ -180,3 +180,34 @@ This verifies in-process state isolation, not authentication or production
 cross-user authorization. P2 must bind stored conversations to authenticated
 users and use the correct snapshot when handling each request. No database,
 backend code, live Gemini calls, or banking execution are involved in these tests.
+
+## Trial 4 - tool-result round trip and matching
+
+Run the fixture-backed read demonstrations:
+
+```powershell
+agent/.venv/Scripts/python.exe -m agent.cli 'What is my balance?' --resolve-read
+agent/.venv/Scripts/python.exe -m agent.cli 'Analyze spending 2026-10' --resolve-read
+```
+
+Each command prints a proposal first, then a grounded reply: balance CNY 5000.00
+or October spending CNY 1843.00. The caller retains the original proposal,
+mock_tools supplies a typed synthetic result with matching arguments, and the
+accepted request is consumed in returned state. No Gemini calls or mutations occur.
+
+Run mismatch and replay checks:
+
+```powershell
+agent/.venv/Scripts/python.exe -m pytest -p no:cacheprovider agent/tests/test_tool_results.py -q
+```
+
+Tests reject wrong conversation/proposal/tool/arguments/account/month and missing
+original proposal records. They also verify safe tool failures, replay rejection,
+and that consuming one result leaves other pending requests intact.
+
+Remembered state now includes pending_tool_requests for proposals already issued.
+This is different from pending_transfer, which is an unfinished clarification
+draft. Completing clarification or saying never mind clears the draft, not the
+issued proposal history awaiting results. Only saving the returned consumed state
+prevents sequential replay; backend authorization and atomic idempotency remain
+P2 responsibilities. See integration.md for the proposed envelope format.
