@@ -1,5 +1,95 @@
 # Memory trial 1
 
+## Task 6 - rehearsal checklist and results (2026-10-19)
+
+Run these commands from the repository root. These demonstrations use synthetic
+accounts and recipients; transfer proposals never execute banking actions.
+
+### 1. Regression checks
+
+```powershell
+$env:PYTHONDONTWRITEBYTECODE = '1'
+$env:PYTHONPATH = (Get-Location).Path + ';' + (Join-Path (Get-Location) 'backend')
+$env:DATABASE_URL = 'sqlite:///:memory:'
+agent/.venv/Scripts/python.exe -m pytest -p no:cacheprovider tests/test_contracts.py agent/tests backend/tests finance/tests subscriptions/tests -q
+```
+
+Observed: **217 passed**, with one existing Google SDK Pydantic deprecation
+warning. These are automated tests; they do not make live Gemini requests.
+The environment settings above apply to this terminal session.
+
+### 2. Offline rehearsal
+
+```powershell
+agent/.venv/Scripts/python.exe -m agent.cli --interactive
+```
+
+Enter each line separately:
+
+```text
+Transfer to Alice
+500
+Alice Chen
+quit
+```
+
+Observed: asks for amount, then full name, then proposes exactly 500.00 CNY to
+recipient_alice. No proposal appears before clarification finishes.
+
+Start the interactive command again and enter:
+
+```text
+Transfer to Alice
+500
+never mind
+Transfer 300 to Bob
+quit
+```
+
+Observed: discards the unfinished Alice draft and proposes 300.00 CNY to
+recipient_bob without reusing the old amount or recipient.
+
+```powershell
+agent/.venv/Scripts/python.exe -m agent.cli 'What is my balance?' --resolve-read
+agent/.venv/Scripts/python.exe -m agent.cli 'Analyze spending 2026-10' --resolve-read
+```
+
+Observed: a proposal followed by CNY 5000.00 balance / CNY 1843.00 October
+spending. Both figures come from fixtures, not a bank or Gemini.
+Conversation isolation is covered by the regression suite and Trial 3 below.
+
+### 3. Live Gemini rehearsal
+
+If this terminal has not inherited your previously saved key, load it without
+printing it:
+
+```powershell
+if (!$env:GEMINI_API_KEY) {
+    $env:GEMINI_API_KEY = [Environment]::GetEnvironmentVariable('GEMINI_API_KEY', 'User')
+}
+agent/.venv/Scripts/python.exe -m agent.cli 'How much money do I have?' --provider gemini
+agent/.venv/Scripts/python.exe -m agent.cli 'Could you send 500 yuan to Bob?' --provider gemini
+agent/.venv/Scripts/python.exe -m agent.cli --interactive --provider gemini
+```
+
+For the interactive command enter Transfer to Alice, then 500, then Alice Chen,
+then quit, each on a separate line.
+
+Observed in live service checks: the balance wording produced get_balance;
+the Bob wording produced request_transfer for 500.00 CNY to recipient_bob;
+the Alice conversation asked both clarification questions and then produced the
+correct proposal. The initial messages used Gemini; exact amount/name
+follow-ups used local clarification logic. No banking actions executed.
+
+The first restricted-network attempt failed with network_connection_error;
+the subsequent network-enabled run passed all three scenarios. The SDK still
+printed a thought_signature metadata warning, but returned usable structured
+output. Live checks establish these examples worked on this run, not universal
+language understanding or provider availability.
+
+This task changed only this testing document. No runtime fixes were needed.
+The separate teammate handoff is intentionally deferred.
+
 This offline trial demonstrates a pending transfer retaining its amount and
 recipient across three turns. It uses the mock provider and synthetic fixtures.
 No API key is needed. No transfers or cancellations execute.
