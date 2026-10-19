@@ -1,9 +1,11 @@
 # backend/app/services/adapters.py
-from contracts.models import ChatInput, AgentResult, ActionProposal, BankingContext, PolicyDecision
+from contracts.models import ChatInput, AgentResult, ActionProposal, BankingContext, PolicyDecision, Transaction, SpendingReport
 from app.mocks.agent import MockAgentAdapter
 from app.mocks.security import MockSecurityAdapter
+from app.mocks.finance import MockFinanceAdapter
 from typing import Any
 from contracts.enums import ToolName
+from datetime import datetime
 
 def build_tool_catalog(
     account_ids: list[str] | None = None,
@@ -107,5 +109,38 @@ class SecurityAdapterService:
         # return evaluate_action(proposal, context)
         return MockSecurityAdapter.evaluate_action(proposal, context)
 
+def calculate_history_periods(period: str, extra_months: int = 3) -> list[str]:
+    """
+    Given a period 'YYYY-MM', returns a list containing the requested period
+    plus the preceding `extra_months` (handles year boundaries cleanly).
+    Example: '2026-10' -> ['2026-07', '2026-08', '2026-09', '2026-10']
+    """
+    year, month = map(int, period.split("-"))
+    periods = []
+    
+    for i in range(extra_months, -1, -1):
+        m = month - i
+        y = year
+        while m <= 0:
+            m += 12
+            y -= 1
+        periods.append(f"{y:04d}-{m:02d}")
+        
+    return periods
+
+class FinanceAdapterService:
+    """Bridge for Person 3's Finance Analytics engine."""
+    def __init__(self, use_mock: bool = True):
+        self.use_mock = use_mock
+
+    def analyze(self, transactions: list[Transaction], period: str) -> SpendingReport:
+        if self.use_mock:
+            return MockFinanceAdapter.analyze_spending(transactions, period)
+        # When Person 3's code is merged:
+        # from finance.analytics import analyze_spending
+        # return analyze_spending(transactions, period)
+        return MockFinanceAdapter.analyze_spending(transactions, period)
+
 agent_service = AgentAdapterService(use_mock=True)
 policy_service = SecurityAdapterService(use_mock=True)
+finance_service = FinanceAdapterService(use_mock=True)
