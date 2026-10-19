@@ -7,7 +7,7 @@ from contracts.models import (ChatInput, AgentResult, ActionProposal, Account,
                               Recipient, Subscription, SpendingReport, ExecutionResult, PositiveMoney)
 from contracts.tool_schemas import validate_tool_arguments
 from .provider import Intent, ProviderError, get_provider
-from .request_guard import is_direct_request
+from .request_guard import is_direct_request, stated_word_amounts
 from .conversation import ConversationState, PendingTransfer, ConversationTurn, PendingToolRequest
 
 
@@ -227,8 +227,9 @@ def _process(chat, catalog, results, progress):
         # Fail closed if the model invents an amount absent from the user request.
         import re
         amounts = re.findall(r"(?<!\w)[+-]?\d+(?:\.\d+)?", message)
-        if amount not in [Decimal(a) for a in amounts]:
-            raise ValueError("Ungrounded amount")
+        if amount not in [Decimal(a) for a in amounts] + stated_word_amounts(message):
+            return _transfer_question(progress, draft, "amount",
+                                      "Please confirm the CNY amount using digits, for example 500.")
         amount = TypeAdapter(PositiveMoney).validate_python(amount)
         draft = PendingTransfer.model_validate({**draft.model_dump(), "amount": amount})
         if not extracted.recipient:

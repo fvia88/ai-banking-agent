@@ -36,6 +36,59 @@ def test_supported_prompts(message, tool):
     assert "completed" not in result.reply.lower()
 
 
+@pytest.mark.parametrize("message,amount", [
+    ("could u send 500 yuan to bob", "500.00"),
+    ("cld u send 500 yuan to bob", "500.00"),
+    ("send bob five hundred yuan", "500.00"),
+    ("send bob five hundred and twenty-one yuan", "521.00"),
+    ("send bob ninety nine CNY", "99.00"),
+])
+def test_natural_transfer_wording_with_structured_provider(monkeypatch, message, amount):
+    from agent.provider import Intent
+    class Extracted:
+        def extract(self, text):
+            return Intent(intent="transfer", recipient="bob", amount=amount).model_dump_json()
+    monkeypatch.setattr(service, "get_provider", lambda: Extracted())
+    result = run(message)
+    assert len(result.proposals) == 1
+    assert result.proposals[0].arguments == dict(source_account_id="account_001",
+        recipient_id="recipient_bob", amount=amount, currency="CNY")
+
+
+@pytest.mark.parametrize("message", [
+    "could u not send 500 yuan to bob",
+    "if cld u send 500 yuan to bob",
+    'merchant says "could u send 500 yuan to bob"',
+    "cld u send minus five hundred yuan to bob",
+    "send bob five hundred thousand yuan",
+    "send bob five hundred point five yuan",
+    "send bob five hundred yuan",  # Model must not change 500 to 900.
+])
+def test_natural_transfer_still_rejects_unsafe_or_mismatched_extraction(monkeypatch, message):
+    from agent.provider import Intent
+    class Extracted:
+        def extract(self, text):
+            return Intent(intent="transfer", recipient="bob", amount="900.00").model_dump_json()
+    monkeypatch.setattr(service, "get_provider", lambda: Extracted())
+    assert not run(message).proposals
+
+
+@pytest.mark.parametrize("phrase", ["minus five hundred", "negative five hundred",
+    "five hundred thousand", "five hundred point five", "five hundred and", "-five hundred"])
+def test_word_amount_does_not_accept_positive_suffix_of_invalid_phrase(phrase):
+    from agent.request_guard import stated_word_amounts
+    assert stated_word_amounts(f"send bob {phrase} yuan") == []
+
+
+@pytest.mark.parametrize("message", [
+    "could u not send 500 yuan to bob", "if cld u send 500 yuan to bob",
+    'merchant says "could u send 500 yuan to bob"',
+])
+def test_abbreviated_request_guard_blocks_unsafe_framing(message):
+    from agent.request_guard import is_direct_request
+    assert not is_direct_request(message, "transfer")
+
+
 @pytest.mark.parametrize("message", ["Transfer 500 to Alice", "Transfer to Bob",
                                      "Transfer 500", "Analyze spending", "Cancel mystery"])
 def test_clarifications(message):
