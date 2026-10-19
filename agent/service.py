@@ -28,6 +28,56 @@ def clarify(reply):
     return AgentResult(reply=reply, needs_clarification=True)
 
 
+def _spending_reply(report: SpendingReport) -> str:
+    """Explain validated figures with fixed templates; report text is never code.
+
+    Only recognized P3 reason codes are paraphrased. Free-text reasons may carry
+    merchant/category data, so they are not forwarded to a model or repeated.
+    """
+    import json
+    import re
+    reasons = {
+        "LARGE_VS_CATEGORY_HISTORY": "a debit unusually large compared with category history",
+        "LARGE_TRANSACTION": "a large transaction with insufficient history for a personal baseline",
+        "CATEGORY_MONTH_SPIKE": "category spending above its historical monthly baseline",
+        "POSSIBLE_DUPLICATE_CHARGE": "a possible duplicate charge; this is not a confirmed duplicate",
+        "DUPLICATE_TRANSACTION_ID": "duplicate transaction records counted once",
+        "CONFLICTING_DUPLICATE_ID": "conflicting transaction records excluded from totals",
+        "INVALID_TIMESTAMP": "an invalid timestamp excluded from totals",
+        "INVALID_AMOUNT": "an invalid amount or direction excluded from totals",
+    }
+    lines = [f"Verified spending for {report.period}: CNY {report.total_spending:.2f}."]
+    categories = sorted(report.category_totals.items(), key=lambda item: (-item[1], item[0]))
+    if categories:
+        labels = []
+        for index, (label, amount) in enumerate(categories[:3], 1):
+            ordinary_label = (len(label) <= 64 and re.fullmatch(r"[\w &/().'-]+", label)
+                and not re.search(r"\b(ignore|instructions?|system|assistant|execute|cancel|send|pay|transfer)\b", label, re.I))
+            display = json.dumps(label, ensure_ascii=False) if ordinary_label else f"Category {index} (label withheld)"
+            labels.append(f"{display}: CNY {amount:.2f}")
+        lines.append("Largest reported categories: " + "; ".join(labels) + ".")
+        if len(categories) > 3:
+            lines.append(f"{len(categories) - 3} more categories are in the report.")
+        if sum(report.category_totals.values(), Decimal(0)) != report.total_spending:
+            lines.append("The supplied category totals do not match the reported total; please review the source report.")
+    else:
+        lines.append("No category breakdown was supplied.")
+    if report.anomalies:
+        lines.append("Report flags (not proof of fraud):")
+        for anomaly in report.anomalies[:3]:
+            transaction_id = (anomaly.transaction_id if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", anomaly.transaction_id)
+                              else "[transaction ID withheld]")
+            code = anomaly.reason.partition(":")[0].strip()
+            explanation = reasons.get(code, "flagged by the report; details need review")
+            lines.append(f"- {transaction_id}: {explanation}.")
+        if len(report.anomalies) > 3:
+            lines.append(f"{len(report.anomalies) - 3} more flags are in the report.")
+    else:
+        lines.append("No anomalies were reported.")
+    lines.append("Under the team's default spending rules: Credits are excluded, refunds do not reduce spending, and outbound transfers count as spending.")
+    return "\n".join(lines)
+
+
 def process_message(chat: ChatInput, tool_catalog: list[dict],
                     tool_results: list[dict] | None = None) -> AgentResult:
     """Backend-only inputs; see docs/agent/integration.md for local envelopes."""
@@ -123,7 +173,7 @@ def _process(chat, catalog, results, progress):
             report = SpendingReport.model_validate(data)
             if report.period != expected.period:
                 raise ValueError("Result month differs from requested month")
-            return accept(f"Verified spending for {report.period}: CNY {report.total_spending:.2f}.")
+            return accept(_spending_reply(report))
         if tool == "list_subscriptions":
             from contracts.models import SubscriptionReport
             report = SubscriptionReport.model_validate(data)

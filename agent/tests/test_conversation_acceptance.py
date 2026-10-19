@@ -40,7 +40,7 @@ def test_p1_rehearsal(monkeypatch):
     assert '1843.00' not in rejected.result.reply
     print('Check: September report rejected; October request remains pending.')
     accepted = send(spending, chat.conversation_id, chat.message, [envelope])
-    assert accepted.result.reply == 'Verified spending for 2026-10: CNY 1843.00.'
+    assert accepted.result.reply.startswith('Verified spending for 2026-10: CNY 1843.00.')
     assert not accepted.state.pending_tool_requests
 
     print('\n2. TRANSFER: retain amount and resolve ambiguous Alice')

@@ -411,6 +411,16 @@ not an atomic production idempotency mechanism.
 
 ## Short handoff for Marvel (P2) - proposed integration
 
+Spending explanation extension: after result correlation and SpendingReport
+validation, P1 deterministically summarizes the supplied total, top three
+categories and up to three flags. Recognized P3 reason codes are paraphrased;
+unknown codes get a generic description. Free-text reasons are not interpreted
+as instructions or repeated. No extra data fields or provider calls are required.
+The rules explanation is explicitly for the team's defaults (credits excluded,
+refunds not netted, outbound transfers included). Custom finance configurations
+need an agreed policy/diagnostics handoff before claiming different rules.
+Transaction-level merchant/amount explanations and diagnostics are still deferred.
+
 Cancellation extension: ConversationState supports pending_cancellation
 (original_message) with awaiting="subscription". An exact merchant-name answer
 is matched case-insensitively against current verified subscriptions. Unknown or

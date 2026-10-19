@@ -1,5 +1,33 @@
 # Memory trial 1
 
+## Spending report explanation
+
+```powershell
+agent/.venv/Scripts/python.exe -m agent.cli 'Analyze spending 2026-10' --resolve-read
+```
+
+The first response is a proposal. After a matched synthetic result, the reply
+now includes the report total, up to three largest reported categories, up to
+three report flags, and the team's default spending rules. Empty breakdowns and
+absent anomalies are stated as missing/not reported, not proof of safety.
+If category totals disagree with the reported total, the reply requests review
+rather than silently replacing the total.
+
+This command still uses fixture aggregation, not the backend or P3's real report
+generator. A separate automated integration check feeds the actual merged
+finance.analytics.analyze_spending output to P1's result handler:
+
+```powershell
+agent/.venv/Scripts/python.exe -m pytest -p no:cacheprovider agent/tests/test_tool_results.py -q -k spending
+```
+
+Known P3 anomaly codes get fixed friendly descriptions with their transaction
+IDs. Unknown codes receive a generic flag description. Free-text reasons are
+not echoed; suspicious labels/IDs are withheld. The agent does not guess a
+merchant, transaction amount or historical baseline from an anomaly code.
+Detailed transaction explanations and separate diagnostics await an agreed
+trusted input format. No Gemini call is needed to format a returned report.
+
 ## P1 rehearsal - one command (2026-10-19)
 
 From the repository root:
