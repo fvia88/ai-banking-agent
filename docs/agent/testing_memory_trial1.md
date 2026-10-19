@@ -1,5 +1,38 @@
 # Memory trial 1
 
+## Extension - cancellation selection memory
+
+```powershell
+agent/.venv/Scripts/python.exe -m agent.cli --interactive
+```
+
+Enter each line at the You: prompt:
+
+```text
+Cancel my subscription
+Unknown
+CloudMusic
+StreamBox
+quit
+```
+
+Expected: asks which subscription, asks again for Unknown, reports CloudMusic
+cannot be cancelled while retaining the draft, then produces exactly one
+request_subscription_cancel proposal for sub_streambox. Nothing is executed.
+The draft lives in pending_cancellation with awaiting=subscription; after the
+proposal, it is cleared and the issued proposal remains in pending_tool_requests.
+
+Repeat with Cancel my subscription, then never mind, then StreamBox. The draft
+is discarded, so the final bare merchant name must not produce a cancellation
+proposal. This does not revoke previously issued proposals or cancel a bank action.
+
+Use --provider gemini on the interactive command to interpret the initial request
+online. Exact merchant-name follow-ups use local matching against the current
+trusted subscription list. Matching is case-insensitive and requires the whole
+merchant name. Duplicate merchant names remain ambiguous and require selection
+outside this bounded demo; selecting by subscription ID is not implemented.
+The agent rechecks active status, cancellation support and account lock.
+
 ## Extension - spending month memory
 
 Start a conversation (mock works offline):

@@ -411,6 +411,14 @@ not an atomic production idempotency mechanism.
 
 ## Short handoff for Marvel (P2) - proposed integration
 
+Cancellation extension: ConversationState supports pending_cancellation
+(original_message) with awaiting="subscription". An exact merchant-name answer
+is matched case-insensitively against current verified subscriptions. Unknown or
+duplicate names retain the draft; unsupported/inactive choices cannot produce a
+proposal. Lock status and original direct-request framing are rechecked. Never
+mind clears the draft while retaining issued requests. This is mutually exclusive
+with transfer/spending drafts. Old snapshots default pending_cancellation to null.
+
 Extension: ConversationState also supports pending_spending (original_message,
 account_id) with awaiting="period". Exact YYYY-MM answers complete the spending
 proposal after rechecking the selected account. Invalid answers retain the draft;

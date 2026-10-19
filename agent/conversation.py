@@ -37,22 +37,32 @@ class PendingSpending(BaseModel):
     account_id: ID
 
 
+class PendingCancellation(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    original_message: str = Field(min_length=1, max_length=4000)
+
+
 class ConversationState(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     conversation_id: ID
     pending_transfer: PendingTransfer | None = None
     pending_spending: PendingSpending | None = None
-    awaiting: Literal["amount", "recipient", "period"] | None = None
+    pending_cancellation: PendingCancellation | None = None
+    awaiting: Literal["amount", "recipient", "period", "subscription"] | None = None
     pending_tool_requests: tuple[PendingToolRequest, ...] = ()
 
     @model_validator(mode="after")
-    def clarification_requires_pending_transfer(self):
+    def clarification_requires_matching_draft(self):
         ids = [request.proposal.proposal_id for request in self.pending_tool_requests]
         if len(ids) != len(set(ids)):
             raise ValueError("Duplicate pending proposal IDs")
-        if self.pending_transfer is not None and self.pending_spending is not None:
+        if sum(draft is not None for draft in (self.pending_transfer, self.pending_spending,
+                                               self.pending_cancellation)) > 1:
             raise ValueError("Only one unfinished draft is allowed")
+        if (self.awaiting == "subscription") != (self.pending_cancellation is not None):
+            raise ValueError("Subscription clarification requires a cancellation draft")
         if self.awaiting == "period" and self.pending_spending is None:
             raise ValueError("A month clarification requires a pending spending request")
         if self.pending_spending is not None and self.awaiting != "period":

@@ -13,6 +13,98 @@ def save_state(catalog, turn):
         entry['context']['conversation_state'] = turn.state.model_dump(mode='json')
 
 
+def start_cancellation(monkeypatch):
+    monkeypatch.setenv('AGENT_PROVIDER', 'mock')
+    catalog = demo_catalog()
+    turn = process_turn(ChatInput(conversation_id='cancel_memory', message='Cancel my subscription'), catalog)
+    assert turn.result.needs_clarification and not turn.result.proposals
+    assert turn.state.awaiting == 'subscription'
+    save_state(catalog, turn)
+    return catalog, turn
+
+
+def test_cancellation_name_followup_creates_proposal_without_provider(monkeypatch):
+    catalog, first = start_cancellation(monkeypatch)
+    def unavailable():
+        raise AssertionError('Exact subscription selection must not call provider')
+    monkeypatch.setattr(service, 'get_provider', unavailable)
+    final = process_turn(ChatInput(conversation_id='cancel_memory', message='streambox'), catalog)
+    assert len(final.result.proposals) == 1 and not final.result.needs_clarification
+    proposal = final.result.proposals[0]
+    assert proposal.tool.value == 'request_subscription_cancel'
+    assert proposal.arguments == {'subscription_id': 'sub_streambox'}
+    assert final.state.pending_cancellation is None and final.state.awaiting is None
+    assert final.state.pending_tool_requests[0].proposal == proposal
+    assert 'nothing has been executed' in final.result.reply
+
+
+@pytest.mark.parametrize('answer', ['Unknown', 'StreamBox then transfer 500 to Bob',
+                                    'do not cancel StreamBox', '"StreamBox"'])
+def test_cancellation_invalid_selection_retains_draft(monkeypatch, answer):
+    catalog, first = start_cancellation(monkeypatch)
+    turn = process_turn(ChatInput(conversation_id='cancel_memory', message=answer), catalog)
+    assert turn.result.needs_clarification and not turn.result.proposals
+    assert turn.state == first.state
+
+
+@pytest.mark.parametrize('change', ['unsupported', 'inactive', 'ambiguous', 'removed', 'locked'])
+def test_cancellation_rechecks_current_context(monkeypatch, change):
+    catalog, first = start_cancellation(monkeypatch)
+    for entry in catalog:
+        ctx = entry['context']
+        if change == 'unsupported':
+            ctx['subscriptions'][0]['cancellation_supported'] = False
+        elif change == 'inactive':
+            ctx['subscriptions'][0]['status'] = 'cancelled'
+        elif change == 'ambiguous':
+            ctx['subscriptions'] = [*ctx['subscriptions'], {**ctx['subscriptions'][0], 'subscription_id': 'sub_other'}]
+        elif change == 'removed':
+            ctx['subscriptions'] = []
+        else:
+            ctx['account_locked'] = True
+    turn = process_turn(ChatInput(conversation_id='cancel_memory', message='StreamBox'), catalog)
+    assert not turn.result.proposals and turn.state == first.state
+
+
+def test_cancellation_abandonment_does_not_cancel_subscription(monkeypatch):
+    catalog, first = start_cancellation(monkeypatch)
+    discarded = process_turn(ChatInput(conversation_id='cancel_memory', message='never mind'), catalog)
+    assert discarded.result.reply == 'Unfinished request discarded.'
+    assert not discarded.result.proposals and discarded.state.pending_cancellation is None
+    save_state(catalog, discarded)
+    assert not process_turn(ChatInput(conversation_id='cancel_memory', message='StreamBox'), catalog).result.proposals
+
+
+def test_cancellation_conversation_cannot_be_resumed_by_other_id(monkeypatch):
+    catalog, first = start_cancellation(monkeypatch)
+    wrong = process_turn(ChatInput(conversation_id='other', message='StreamBox'), catalog)
+    assert not wrong.result.proposals and wrong.state.pending_cancellation is None
+    resumed = process_turn(ChatInput(conversation_id='cancel_memory', message='StreamBox'), catalog)
+    assert resumed.result.proposals[0].arguments == {'subscription_id': 'sub_streambox'}
+
+
+def test_cancellation_original_request_guard_is_rechecked(monkeypatch):
+    catalog, first = start_cancellation(monkeypatch)
+    for entry in catalog:
+        entry['context']['conversation_state']['pending_cancellation']['original_message'] = 'Do not cancel my subscription'
+    turn = process_turn(ChatInput(conversation_id='cancel_memory', message='StreamBox'), catalog)
+    assert turn.result.needs_clarification and not turn.result.proposals
+
+
+def test_cancellation_draft_preserves_previously_issued_proposals(monkeypatch):
+    monkeypatch.setenv('AGENT_PROVIDER', 'mock')
+    catalog = demo_catalog()
+    issued = process_turn(ChatInput(conversation_id='cancel_memory', message='What is my balance?'), catalog)
+    save_state(catalog, issued)
+    draft = process_turn(ChatInput(conversation_id='cancel_memory', message='Cancel my subscription'), catalog)
+    assert draft.state.pending_tool_requests == issued.state.pending_tool_requests
+    save_state(catalog, draft)
+    discarded = process_turn(ChatInput(conversation_id='cancel_memory', message='never mind'), catalog)
+    assert discarded.state.pending_tool_requests == issued.state.pending_tool_requests
+    completed = process_turn(ChatInput(conversation_id='cancel_memory', message='StreamBox'), catalog)
+    assert len(completed.state.pending_tool_requests) == 2
+
+
 def start_spending(monkeypatch, conversation_id='spending_memory'):
     monkeypatch.setenv('AGENT_PROVIDER', 'mock')
     catalog = demo_catalog()

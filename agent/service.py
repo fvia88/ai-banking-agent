@@ -8,7 +8,8 @@ from contracts.models import (ChatInput, AgentResult, ActionProposal, Account,
 from contracts.tool_schemas import validate_tool_arguments
 from .provider import Intent, ProviderError, get_provider
 from .request_guard import is_direct_request, stated_word_amounts
-from .conversation import ConversationState, PendingTransfer, PendingSpending, ConversationTurn, PendingToolRequest
+from .conversation import (ConversationState, PendingTransfer, PendingSpending,
+                           PendingCancellation, ConversationTurn, PendingToolRequest)
 
 
 @dataclass
@@ -56,7 +57,8 @@ def process_turn(chat: ChatInput, tool_catalog: list[dict],
         # an execution result if this call is actually processing tool results.
         command = chat.message.strip().casefold().rstrip(".!?").strip()
         if not tool_results and command in {"never mind", "nevermind"}:
-            reply = ("Unfinished request discarded." if original.pending_transfer is not None or original.pending_spending is not None
+            reply = ("Unfinished request discarded." if any(draft is not None for draft in
+                     (original.pending_transfer, original.pending_spending, original.pending_cancellation))
                      else "There is no unfinished request to discard.")
             return ConversationTurn(result=AgentResult(reply=reply),
                                     state=ConversationState(conversation_id=chat.conversation_id,
@@ -140,9 +142,15 @@ def _process(chat, catalog, results, progress):
     previous = context.get("clarification_request")
     pending = progress.state.pending_transfer
     spending = progress.state.pending_spending
+    cancellation = progress.state.pending_cancellation
+    continuing_cancellation = cancellation is not None
     continuing_spending = spending is not None
     continuing = pending is not None and progress.state.awaiting is not None
-    if continuing_spending:
+    if continuing_cancellation:
+        if previous:
+            raise ValueError("Do not mix structured state with legacy replay")
+        extracted = Intent(intent="cancel", subscription=chat.message.strip())
+    elif continuing_spending:
         if previous:
             raise ValueError("Do not mix structured state with legacy replay")
         import re
@@ -192,14 +200,15 @@ def _process(chat, catalog, results, progress):
                 message = re.sub(r"\bto\b.*$", "", previous).strip() + " to " + chat.message
             elif re.fullmatch(r"[+-]?\d+(?:\.\d+)?", chat.message.strip()):
                 message = re.sub(r"^(transfer|send)\b", r"\1 " + chat.message, previous, flags=re.I)
-    if not continuing and not continuing_spending:
+    if not continuing and not continuing_spending and not continuing_cancellation:
         extracted = Intent.model_validate_json(get_provider().extract(message))
     mapping = {"balance": "get_balance", "spending": "analyze_spending",
                "subscriptions": "list_subscriptions", "transfer": "request_transfer",
                "cancel": "request_subscription_cancel"}
     tool = mapping.get(extracted.intent)
     # State-changing intent must be explicit in the original pending/current request.
-    request_text = pending.original_message if continuing else (previous or chat.message)
+    request_text = (cancellation.original_message if continuing_cancellation else
+                    pending.original_message if continuing else (previous or chat.message))
     if extracted.intent == "transfer" and not is_direct_request(request_text, "transfer"):
         return clarify("Please explicitly request the transfer and its exact amount and recipient.")
     if extracted.intent == "cancel" and not is_direct_request(request_text, "cancel"):
@@ -269,8 +278,13 @@ def _process(chat, catalog, results, progress):
                    s.merchant.casefold() == extracted.subscription.casefold() and
                    s.merchant.casefold() in message.casefold()]
         if len(matches) != 1:
+            progress.state = ConversationState(conversation_id=chat.conversation_id,
+                pending_cancellation=PendingCancellation(original_message=request_text),
+                awaiting="subscription", pending_tool_requests=progress.state.pending_tool_requests)
             return clarify("Which verified subscription should be cancelled?")
         if not matches[0].cancellation_supported or matches[0].status != "active":
+            if continuing_cancellation:
+                return clarify("Cancellation is unavailable for this subscription. Please choose another verified subscription or say never mind.")
             return AgentResult(reply="Cancellation is unavailable for this subscription.")
         args["subscription_id"] = matches[0].subscription_id
     validated = validate_tool_arguments(tool, args)
