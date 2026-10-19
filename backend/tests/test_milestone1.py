@@ -1,5 +1,6 @@
 # backend/tests/test_milestone1.py
 from fastapi import status
+from decimal import Decimal
 
 def test_health_check(client):
     response = client.get("/api/v1/health")
@@ -10,15 +11,17 @@ def test_list_accounts(client):
     response = client.get("/api/v1/accounts", headers={"X-Demo-User-Id": "usr_demo_01"})
     assert response.status_code == status.HTTP_200_OK
     data = response.json()
-    assert len(data) >= 1
-    assert data[0]["account_id"] == "acc_cny_001"
-    assert data[0]["balance"] == "15250.00"
+    assert "accounts" in data
+    assert len(data["accounts"]) >= 1
+    assert data["accounts"][0]["account_id"] == "acc_cny_001"
+    assert Decimal(str(data["accounts"][0]["balance"])) == Decimal("15250.00")
 
 def test_get_transactions_filtered(client):
-    # Match October 2026 transactions
     response = client.get("/api/v1/transactions?period=2026-10", headers={"X-Demo-User-Id": "usr_demo_01"})
     assert response.status_code == status.HTTP_200_OK
-    txs = response.json()
+    data = response.json()
+    assert "transactions" in data
+    txs = data["transactions"]
     assert len(txs) == 1
     assert txs[0]["merchant"] == "Starbucks"
 

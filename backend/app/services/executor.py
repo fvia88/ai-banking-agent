@@ -66,9 +66,11 @@ def execute_transfer(
     audit_id = f"aud_{uuid.uuid4().hex[:10]}"
     audit_entry = AuditLogModel(
         audit_id=audit_id,
+        action_id=record.action_id,
         user_id=user.user_id,
         action_type="TRANSFER_EXECUTED_ATOMIC",
         payload_digest=record.action_digest,
+        reason_code="TRANSFER_SUCCESS",
         details=f"Transferred {amount:.2f} CNY to {recipient_id}. Remaining balance: {account.balance:.2f} CNY."
     )
     db.add(audit_entry)

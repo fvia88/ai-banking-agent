@@ -62,6 +62,8 @@ def test_atomic_money_transfer_and_idempotency(client, db_session):
     # 5. Check Audit log endpoint
     audit_resp = client.get("/api/v1/audit", headers={"X-Demo-User-Id": "usr_demo_01"})
     assert audit_resp.status_code == 200
-    audit_logs = audit_resp.json()
-    assert len(audit_logs) >= 1
-    assert any("TRANSFER_EXECUTED" in log["action_type"] for log in audit_logs)
+    data = audit_resp.json()
+    assert "events" in data
+    events = data["events"]
+    assert len(events) >= 1
+    assert any("TRANSFER_EXECUTED" in ev["event_type"] for ev in events)
