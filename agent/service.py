@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from uuid import uuid4
 from pydantic import ValidationError, TypeAdapter
 from contracts.models import (ChatInput, AgentResult, ActionProposal, Account,
-                              Recipient, Subscription, SpendingReport, ExecutionResult, PositiveMoney)
+                              Recipient, Subscription, SubscriptionReport, SpendingReport, ExecutionResult, PositiveMoney)
 from contracts.tool_schemas import validate_tool_arguments
 from .provider import Intent, ProviderError, get_provider
 from .request_guard import is_direct_request, stated_word_amounts
@@ -26,6 +26,28 @@ def _transfer_question(progress, draft, field, reply):
 
 def clarify(reply):
     return AgentResult(reply=reply, needs_clarification=True)
+
+
+def _subscription_reply(report: SubscriptionReport) -> str:
+    """Display report candidates as data, never as verified subscription state."""
+    import json
+    import re
+    if not report.candidates:
+        return ("No recurring-charge candidates were reported. This does not prove "
+                "that you have no active subscriptions. No cancellation has been requested.")
+    lines = [f"Found {len(report.candidates)} recurring-charge candidates:"]
+    cadences = {"weekly": "weekly", "monthly": "monthly", "annual": "annually",
+                "unknown": "(cadence unknown)"}
+    for index, candidate in enumerate(report.candidates[:5], 1):
+        merchant = candidate.merchant
+        ordinary_name = (len(merchant) <= 64 and re.fullmatch(r"[\w &/().'-]+", merchant)
+            and not re.search(r"\b(ignore|instructions?|system|assistant|execute|cancel|send|pay|transfer)\b", merchant, re.I))
+        name = json.dumps(merchant, ensure_ascii=False) if ordinary_name else f"Candidate {index} (name withheld)"
+        lines.append(f"- {name}: estimated CNY {candidate.estimated_amount:.2f} {cadences[candidate.cadence.value]}.")
+    if len(report.candidates) > 5:
+        lines.append(f"{len(report.candidates) - 5} more candidates are in the report.")
+    lines.append("These are not proof of active subscriptions. No cancellation has been requested.")
+    return "\n".join(lines)
 
 
 def _spending_reply(report: SpendingReport) -> str:
@@ -175,9 +197,8 @@ def _process(chat, catalog, results, progress):
                 raise ValueError("Result month differs from requested month")
             return accept(_spending_reply(report))
         if tool == "list_subscriptions":
-            from contracts.models import SubscriptionReport
             report = SubscriptionReport.model_validate(data)
-            return accept(f"Found {len(report.candidates)} recurring-charge candidates. These are not proof of active subscriptions.")
+            return accept(_subscription_reply(report))
         execution = ExecutionResult.model_validate(data)
         if execution.status.value == "COMPLETED":
             return accept(f"The backend confirmed completion. Action ID: {execution.action_id}.")
