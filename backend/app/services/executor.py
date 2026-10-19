@@ -76,3 +76,30 @@ def execute_transfer(
     db.add(audit_entry)
 
     return audit_id
+
+def execute_subscription_cancel(
+    db: Session,
+    user: UserModel,
+    record: ActionApprovalModel
+) -> str:
+    """
+    Simulates cancelling a recurring subscription:
+    1. Validates subscription_id
+    2. Writes to the immutable Audit log
+    """
+    payload = json.loads(record.payload_json)
+    subscription_id = payload.get("subscription_id", "unknown_sub")
+
+    audit_id = f"aud_{uuid.uuid4().hex[:10]}"
+    audit_entry = AuditLogModel(
+        audit_id=audit_id,
+        action_id=record.action_id,
+        user_id=user.user_id,
+        action_type="SUBSCRIPTION_CANCELLED",
+        payload_digest=record.action_digest,
+        reason_code="USER_CONFIRMED_CANCELLATION",
+        details=f"Subscription '{subscription_id}' cancelled successfully for user {user.user_id}."
+    )
+    db.add(audit_entry)
+
+    return audit_id

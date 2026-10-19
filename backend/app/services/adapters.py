@@ -1,8 +1,9 @@
 # backend/app/services/adapters.py
-from contracts.models import ChatInput, AgentResult, ActionProposal, BankingContext, PolicyDecision, Transaction, SpendingReport
+from contracts.models import ChatInput, AgentResult, ActionProposal, BankingContext, PolicyDecision, Transaction, SpendingReport, SubscriptionReport
 from app.mocks.agent import MockAgentAdapter
 from app.mocks.security import MockSecurityAdapter
 from app.mocks.finance import MockFinanceAdapter
+from app.mocks.subscriptions import MockSubscriptionsAdapter
 from typing import Any
 from contracts.enums import ToolName
 from datetime import datetime
@@ -141,6 +142,20 @@ class FinanceAdapterService:
         # return analyze_spending(transactions, period)
         return MockFinanceAdapter.analyze_spending(transactions, period)
 
+class SubscriptionsAdapterService:
+    """Bridge for Person 5's Subscription Detection engine."""
+    def __init__(self, use_mock: bool = True):
+        self.use_mock = use_mock
+
+    def detect(self, transactions: list[Transaction]) -> SubscriptionReport:
+        if self.use_mock:
+            return MockSubscriptionsAdapter.detect_subscriptions(transactions)
+        # When Person 5's code is merged:
+        # from subscriptions.detector import detect_subscriptions
+        # return detect_subscriptions(transactions)
+        return MockSubscriptionsAdapter.detect_subscriptions(transactions)
+
 agent_service = AgentAdapterService(use_mock=True)
 policy_service = SecurityAdapterService(use_mock=True)
 finance_service = FinanceAdapterService(use_mock=True)
+subscriptions_service = SubscriptionsAdapterService(use_mock=True)

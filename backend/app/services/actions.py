@@ -92,3 +92,73 @@ def create_action_record(
     )
 
     return record, digest, decision.tier.value
+
+# 1. Add CancelArgs schema (per Section 5 of the spec):
+class CancelArgs(BaseModel):
+    subscription_id: str = Field(min_length=1)
+
+# 2. Update create_action_record:
+def create_action_record(
+    user_id: str,
+    proposal: ActionProposal,
+    source_account_id: str,
+    context: BankingContext
+) -> tuple[ActionApprovalModel, str, str]:
+    decision = policy_service.evaluate(proposal, context)
+    if not decision.allowed_to_proceed:
+        raise ValueError(f"Action blocked by policy: {decision.reason_code}")
+
+    action_id = f"act_{uuid.uuid4().hex[:12]}"
+    
+    # Validate typed arguments depending on tool
+    if proposal.tool == ToolName.REQUEST_TRANSFER:
+        raw_recipient = proposal.arguments.get("recipient_id")
+        if not raw_recipient or not str(raw_recipient).strip():
+            raise ValueError("Missing or empty required field: 'recipient_id'")
+
+        raw_amount = proposal.arguments.get("amount")
+        if raw_amount is None:
+            raise ValueError("Missing required field: 'amount'")
+
+        validated_transfer = TransferArgs(
+            recipient_id=str(raw_recipient).strip(),
+            amount=Decimal(str(raw_amount)),
+            currency=proposal.arguments.get("currency", "CNY"),
+            source_account_id=source_account_id
+        )
+        payload_dict = {
+            "recipient_id": validated_transfer.recipient_id,
+            "amount": f"{validated_transfer.amount:.2f}",
+            "currency": validated_transfer.currency,
+            "source_account_id": validated_transfer.source_account_id
+        }
+    elif proposal.tool == ToolName.REQUEST_SUBSCRIPTION_CANCEL:
+        raw_sub_id = proposal.arguments.get("subscription_id")
+        if not raw_sub_id or not str(raw_sub_id).strip():
+            raise ValueError("Missing or empty required field: 'subscription_id'")
+
+        validated_cancel = CancelArgs(subscription_id=str(raw_sub_id).strip())
+        payload_dict = {
+            "subscription_id": validated_cancel.subscription_id
+        }
+    else:
+        payload_dict = proposal.arguments
+
+    # Compute canonical SHA-256 digest
+    digest = compute_action_digest(proposal.tool.value, payload_dict)
+
+    now = datetime.now(timezone.utc)
+    record = ActionApprovalModel(
+        action_id=action_id,
+        user_id=user_id,
+        tool=proposal.tool.value,
+        tier=decision.tier.value,
+        payload_json=json.dumps(payload_dict, default=str),
+        action_digest=digest,
+        status=ActionStatus.PENDING_CONFIRMATION.value,
+        failed_attempts=0,
+        created_at=now,
+        expires_at=now + timedelta(minutes=10)
+    )
+
+    return record, digest, decision.tier.value
