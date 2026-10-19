@@ -408,3 +408,68 @@ CLI --resolve-read uses this round trip with fixtures. Interactive mode remains
 proposal-only; it does not execute tools. No backend imports or database writes
 were added. Replay protection here is sequential, in-memory caller bookkeeping,
 not an atomic production idempotency mechanism.
+
+## Short handoff for Marvel (P2) - proposed integration
+
+P1's local flow is ready for integration discussion: transfer clarification,
+caller-owned memory, draft abandonment and matching tool results are tested.
+The CLI still uses fixtures; these checks do not mean the backend is connected.
+
+1. **Call and retain state.** The frozen `process_message(chat, tool_catalog,
+   tool_results=None) -> AgentResult` stays unchanged. For the current memory
+   flow, use the additional local helper `agent.service.process_turn` (same
+   inputs), returning `turn.result` and `turn.state`. Agree on adopting this
+   helper or an equivalent wrapper before wiring it into the backend.
+2. **Supply trusted context.** Catalog entries use `name`, `parameters` (shared
+   argument JSON schema), and `context`, rather than the nested OpenAI tool
+   format. Supply authenticated account IDs, lock status, verified recipients
+   and subscriptions. Put the same saved state in
+   `entry['context']['conversation_state']` on every entry. First turn may omit
+   state; subsequent turns must use the latest returned state for that
+   authenticated user's conversation. Do not accept this context from client
+   message text.
+3. **Save every returned state.** Store `turn.state.model_dump(mode='json')`
+   after clarification, abandonment, proposal generation and result handling.
+   Return `turn.result` as the public reply. Keep conversations separate and
+   serialize updates per conversation to prevent stale-state races.
+4. **Handle proposals in the backend.** Validate canonical arguments, including
+   `recipient_id` for transfers. Route read proposals to the appropriate
+   backend/finance/subscription implementation. Transfers and cancellations
+   require backend policy checks and the required confirmation/MFA before
+   execution. A proposal itself is never evidence of success.
+5. **Return one correlated result per agent call.** Use the original proposal's
+   ID, tool and validated arguments, plus its conversation ID. Success data must
+   match the shared Account, SpendingReport, SubscriptionReport or
+   ExecutionResult model as appropriate. Feed it back with the saved state,
+   then save the newly returned state.
+
+Proposed result envelope (placeholders refer to the actual original proposal):
+
+```python
+tool_result = {
+    "conversation_id": chat.conversation_id,
+    "proposal_id": proposal.proposal_id,
+    "tool": proposal.tool.value,
+    "arguments": proposal.arguments,
+    "status": "success",  # or "error" for a failed tool call
+    "data": validated_data.model_dump(mode="json"),
+}
+turn = process_turn(chat, catalog_with_saved_state, tool_results=[tool_result])
+# Persist turn.state; expose turn.result.
+```
+
+The backend must establish that the tool result is authentic and belongs to the
+user, account and original action. Matching echoed fields alone does not prove
+this. Keep execution action IDs, confirmation, MFA and atomic idempotency in the
+backend. Never put backend metadata into the frozen tool argument dictionaries.
+
+Configuration: `AGENT_PROVIDER=gemini`, `GEMINI_API_KEY`, optional `GEMINI_MODEL`
+(default `gemini-3.1-flash-lite`). The adapter reads process environment variables;
+a settings class reading `.env` does not automatically populate `os.environ`.
+Use `AGENT_PROVIDER=mock` for offline integration tests.
+
+Reference files: `agent/service.py` (calls and result checks),
+`agent/conversation.py` (state), `agent/mock_tools.py` (synthetic catalog/result
+examples only), and `docs/agent/testing_memory_trial1.md` (rehearsal commands).
+These context/state/result conventions are proposed P1/P2 integration choices,
+not changes to the frozen v1.0.0 contracts. No backend code was changed here.
