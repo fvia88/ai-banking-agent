@@ -401,7 +401,7 @@ export default function App() {
                     style={{
                       padding: '4px 8px',
                       background: '#ff9800',
-                      color: '#fff',
+                      color: '#fff', 
                       border: 'none',
                       borderRadius: '4px',
                       cursor: 'pointer',

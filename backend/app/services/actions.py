@@ -147,13 +147,15 @@ def create_action_record(
     # Compute canonical SHA-256 digest
     digest = compute_action_digest(proposal.tool.value, payload_dict)
 
+    # Create database record with clean pure payload_dict and proposal_id
     now = datetime.now(timezone.utc)
     record = ActionApprovalModel(
         action_id=action_id,
+        proposal_id=proposal.proposal_id,
         user_id=user_id,
         tool=proposal.tool.value,
         tier=decision.tier.value,
-        payload_json=json.dumps(payload_dict, default=str),
+        payload_json=json.dumps(payload_dict, default=str), # pure arguments only
         action_digest=digest,
         status=ActionStatus.PENDING_CONFIRMATION.value,
         failed_attempts=0,

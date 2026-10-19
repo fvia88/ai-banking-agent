@@ -58,6 +58,7 @@ class ActionApprovalModel(Base):
     __tablename__ = "action_approvals"
 
     action_id = Column(String(64), primary_key=True)
+    proposal_id = Column(String(64), nullable=True)
     user_id = Column(String(64), nullable=False)
     tool = Column(String(64), nullable=False)
     tier = Column(String(16), default="YELLOW", nullable=False)
