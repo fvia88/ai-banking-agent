@@ -24,7 +24,9 @@ def handle_chat(
 
     result = agent_service.process(chat_input, account_ids=account_ids)
 
-    # 2. If the AI proposed an action, evaluate policy and save if allowed
+    # 2. If the AI proposed an action, evaluate policy and save if confirmation is required
+    has_pending_actions = False
+
     if result.proposals:
         primary_account = db.query(AccountModel).filter(AccountModel.user_id == user.user_id).first()
         source_account_id = primary_account.account_id if primary_account else "acc_cny_001"
@@ -47,13 +49,19 @@ def handle_chat(
                     source_account_id=source_account_id,
                     context=context
                 )
-                db.add(action_record)
-                
-                proposal.arguments["action_id"] = action_record.action_id
-                proposal.arguments["action_digest"] = digest
-                proposal.arguments["tier"] = tier
+
+                # ONLY queue into action_approvals if it requires user confirmation (Yellow/Red)
+                if tier in ["YELLOW", "RED"]:
+                    db.add(action_record)
+                    proposal.arguments["action_id"] = action_record.action_id
+                    proposal.arguments["action_digest"] = digest
+                    proposal.arguments["tier"] = tier
+                    has_pending_actions = True
+                else:
+                    # GREEN tier: Automatic query, no ticket needed
+                    proposal.arguments["tier"] = "GREEN"
+
             except ValueError as e:
-                # If policy blocks action (e.g. ACCOUNT_LOCKED), reject gracefully
                 return ChatOutput(
                     conversation_id=chat_input.conversation_id,
                     reply=f"Action blocked: Your account is currently locked for state-changing operations.",
@@ -62,7 +70,7 @@ def handle_chat(
                 )
 
         db.commit()
-        status = ActionStatus.PENDING_CONFIRMATION
+        status = ActionStatus.PENDING_CONFIRMATION if has_pending_actions else ActionStatus.COMPLETED
     else:
         status = ActionStatus.COMPLETED
 
