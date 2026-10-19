@@ -275,7 +275,7 @@ export default function App() {
                                     style={{ padding: '4px', width: '100px' }}
                                   />
                                   <button
-                                    onClick={() => handleVerify(act.arguments.action_id!, actionStates[act.arguments.action_id]?.mfaCode || '')}
+                                    onClick={() => handleVerify(act.arguments.action_id!, actionStates[act.arguments.action_id!]?.mfaCode || '')}
                                     style={{ padding: '4px 8px', background: '#d32f2f', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
                                   >
                                     Verify
