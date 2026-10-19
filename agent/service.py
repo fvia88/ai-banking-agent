@@ -8,7 +8,7 @@ from contracts.models import (ChatInput, AgentResult, ActionProposal, Account,
 from contracts.tool_schemas import validate_tool_arguments
 from .provider import Intent, ProviderError, get_provider
 from .request_guard import is_direct_request, stated_word_amounts
-from .conversation import ConversationState, PendingTransfer, ConversationTurn, PendingToolRequest
+from .conversation import ConversationState, PendingTransfer, PendingSpending, ConversationTurn, PendingToolRequest
 
 
 @dataclass
@@ -56,7 +56,7 @@ def process_turn(chat: ChatInput, tool_catalog: list[dict],
         # an execution result if this call is actually processing tool results.
         command = chat.message.strip().casefold().rstrip(".!?").strip()
         if not tool_results and command in {"never mind", "nevermind"}:
-            reply = ("Unfinished request discarded." if original.pending_transfer is not None
+            reply = ("Unfinished request discarded." if original.pending_transfer is not None or original.pending_spending is not None
                      else "There is no unfinished request to discard.")
             return ConversationTurn(result=AgentResult(reply=reply),
                                     state=ConversationState(conversation_id=chat.conversation_id,
@@ -139,8 +139,23 @@ def _process(chat, catalog, results, progress):
     message = chat.message
     previous = context.get("clarification_request")
     pending = progress.state.pending_transfer
+    spending = progress.state.pending_spending
+    continuing_spending = spending is not None
     continuing = pending is not None and progress.state.awaiting is not None
-    if continuing:
+    if continuing_spending:
+        if previous:
+            raise ValueError("Do not mix structured state with legacy replay")
+        import re
+        from datetime import date
+        period = chat.message.strip()
+        try:
+            if not re.fullmatch(r"[0-9]{4}-(0[1-9]|1[0-2])", period):
+                raise ValueError("Invalid month format")
+            date(int(period[:4]), int(period[5:]), 1)
+        except ValueError:
+            return clarify("Please enter a valid month using YYYY-MM, for example 2026-11.")
+        extracted = Intent(intent="spending", period=period)
+    elif continuing:
         if previous:
             raise ValueError("Do not mix structured state with legacy replay")
         if not is_direct_request(pending.original_message, "transfer"):
@@ -177,7 +192,7 @@ def _process(chat, catalog, results, progress):
                 message = re.sub(r"\bto\b.*$", "", previous).strip() + " to " + chat.message
             elif re.fullmatch(r"[+-]?\d+(?:\.\d+)?", chat.message.strip()):
                 message = re.sub(r"^(transfer|send)\b", r"\1 " + chat.message, previous, flags=re.I)
-    if not continuing:
+    if not continuing and not continuing_spending:
         extracted = Intent.model_validate_json(get_provider().extract(message))
     mapping = {"balance": "get_balance", "spending": "analyze_spending",
                "subscriptions": "list_subscriptions", "transfer": "request_transfer",
@@ -202,10 +217,15 @@ def _process(chat, catalog, results, progress):
         args["source_account_id" if extracted.intent == "transfer" else "account_id"] = accounts[0]
         if continuing and pending.source_account_id != accounts[0]:
             raise ValueError("Selected source account changed during clarification")
+        if continuing_spending and spending.account_id != accounts[0]:
+            raise ValueError("Selected spending account changed during clarification")
     if extracted.intent in ("transfer", "cancel") and context.get("account_locked", False):
         return AgentResult(reply="This account is locked. No state-changing proposal was created.")
     if extracted.intent == "spending":
         if not extracted.period:
+            progress.state = ConversationState(conversation_id=chat.conversation_id,
+                pending_spending=PendingSpending(original_message=chat.message, account_id=args['account_id']),
+                awaiting="period", pending_tool_requests=progress.state.pending_tool_requests)
             return clarify("Which month? Please use YYYY-MM.")
         args["period"] = extracted.period
     if extracted.intent == "transfer":

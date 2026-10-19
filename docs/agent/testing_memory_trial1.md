@@ -1,5 +1,50 @@
 # Memory trial 1
 
+## Extension - spending month memory
+
+Start a conversation (mock works offline):
+
+```powershell
+agent/.venv/Scripts/python.exe -m agent.cli --interactive
+```
+
+Enter these lines one at a time:
+
+```text
+Analyze my spending
+2026-13
+2026-11
+quit
+```
+
+Expected: asks for a month, rejects 2026-13 while retaining the request, then
+proposes analyze_spending with account_001 and period 2026-11. No figures are
+reported until a matching trusted tool result is returned. The interactive
+demo remains proposal-only.
+
+To try Gemini wording instead, start with:
+
+```powershell
+agent/.venv/Scripts/python.exe -m agent.cli --interactive --provider gemini
+```
+
+Enter "Where did my money go?", then "2026-11" (without quotes). Gemini handles
+the initial request; the exact YYYY-MM follow-up is validated locally. Enter
+these answers at the CLI's You: prompt, not at the PowerShell prompt.
+
+An unfinished spending request is stored in pending_spending with awaiting=period.
+Standalone never mind clears it. Accepted proposals move into pending_tool_requests
+for result matching. The caller still saves the returned state on every turn.
+Only exact YYYY-MM follow-ups are supported here; natural month-name answers,
+corrections and switching requests during clarification are deferred.
+
+Automated acceptance coverage also checks unchanged account selection and
+separate spending/transfer conversations:
+
+```powershell
+agent/.venv/Scripts/python.exe -m pytest -p no:cacheprovider agent/tests/test_conversation_acceptance.py agent/tests/test_conversation_state.py -q
+```
+
 ## Task 6 - rehearsal checklist and results (2026-10-19)
 
 Run these commands from the repository root. These demonstrations use synthetic

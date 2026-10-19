@@ -411,6 +411,12 @@ not an atomic production idempotency mechanism.
 
 ## Short handoff for Marvel (P2) - proposed integration
 
+Extension: ConversationState also supports pending_spending (original_message,
+account_id) with awaiting="period". Exact YYYY-MM answers complete the spending
+proposal after rechecking the selected account. Invalid answers retain the draft;
+never mind clears it. Transfer and spending drafts are mutually exclusive.
+Existing snapshots without pending_spending remain valid (default null).
+
 P1's local flow is ready for integration discussion: transfer clarification,
 caller-owned memory, draft abandonment and matching tool results are tested.
 The CLI still uses fixtures; these checks do not mean the backend is connected.

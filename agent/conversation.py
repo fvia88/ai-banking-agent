@@ -30,12 +30,20 @@ class PendingToolRequest(BaseModel):
         return self
 
 
+class PendingSpending(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    original_message: str = Field(min_length=1, max_length=4000)
+    account_id: ID
+
+
 class ConversationState(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     conversation_id: ID
     pending_transfer: PendingTransfer | None = None
-    awaiting: Literal["amount", "recipient"] | None = None
+    pending_spending: PendingSpending | None = None
+    awaiting: Literal["amount", "recipient", "period"] | None = None
     pending_tool_requests: tuple[PendingToolRequest, ...] = ()
 
     @model_validator(mode="after")
@@ -43,7 +51,15 @@ class ConversationState(BaseModel):
         ids = [request.proposal.proposal_id for request in self.pending_tool_requests]
         if len(ids) != len(set(ids)):
             raise ValueError("Duplicate pending proposal IDs")
-        if self.awaiting is not None and self.pending_transfer is None:
+        if self.pending_transfer is not None and self.pending_spending is not None:
+            raise ValueError("Only one unfinished draft is allowed")
+        if self.awaiting == "period" and self.pending_spending is None:
+            raise ValueError("A month clarification requires a pending spending request")
+        if self.pending_spending is not None and self.awaiting != "period":
+            raise ValueError("Pending spending must await a month")
+        if self.pending_transfer is not None and self.awaiting == "period":
+            raise ValueError("A transfer cannot await a spending month")
+        if self.awaiting in {"amount", "recipient"} and self.pending_transfer is None:
             raise ValueError("A clarification field requires a pending transfer")
         if self.pending_transfer:
             if self.awaiting == "amount" and self.pending_transfer.amount is not None:
