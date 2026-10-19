@@ -77,6 +77,84 @@ def save_state(catalog, turn):
         entry['context']['conversation_state'] = turn.state.model_dump(mode='json')
 
 
+@pytest.mark.parametrize('verified_state', ['active', 'missing', 'unsupported', 'cancelled', 'locked', 'ambiguous'])
+def test_subscription_listing_then_cancellation_uses_current_verified_context(monkeypatch, verified_state):
+    """A displayed candidate never grants cancellation authority or supplies its ID."""
+    monkeypatch.setenv('AGENT_PROVIDER', 'mock')
+    catalog = demo_catalog()
+    conversation_id = 'listing_then_cancel'
+    chat = ChatInput(conversation_id=conversation_id, message='List subscriptions')
+    listed = process_turn(chat, catalog)
+    assert len(listed.result.proposals) == 1
+    listing = listed.result.proposals[0]
+    assert listing.tool.value == 'list_subscriptions'
+    save_state(catalog, listed)
+    report = dict(conversation_id=conversation_id, proposal_id=listing.proposal_id,
+        tool=listing.tool.value, arguments=listing.arguments, status='success', data={'candidates': [
+            dict(subscription_id='detector_candidate_only', merchant='StreamBox',
+                 estimated_amount='39.00', cadence='monthly', confidence=1.0,
+                 evidence_transaction_ids=['synthetic_tx_1'], cancellation_supported=True)]})
+    displayed = process_turn(chat, catalog, [report])
+    assert 'StreamBox' in displayed.result.reply and 'estimated CNY 39.00 monthly' in displayed.result.reply
+    assert not displayed.result.proposals and not displayed.state.pending_tool_requests
+    assert displayed.state.pending_cancellation is None
+    save_state(catalog, displayed)
+
+    asked = process_turn(ChatInput(conversation_id=conversation_id, message='Cancel my subscription'), catalog)
+    assert asked.result.needs_clarification and not asked.result.proposals
+    assert asked.state.awaiting == 'subscription'
+    save_state(catalog, asked)
+
+    # Refresh backend-owned context AFTER listing/clarification: the report's
+    # confidence and cancellation_supported must never override current records.
+    for entry in catalog:
+        verified = deepcopy(entry['context']['subscriptions'])
+        if verified_state == 'missing':
+            verified = []
+        elif verified_state == 'unsupported':
+            verified[0]['cancellation_supported'] = False
+        elif verified_state == 'cancelled':
+            verified[0]['status'] = 'cancelled'
+        elif verified_state == 'locked':
+            entry['context']['account_locked'] = True
+        elif verified_state == 'ambiguous':
+            verified.append({**verified[0], 'subscription_id': 'another_verified_streambox'})
+        entry['context']['subscriptions'] = verified
+    before = deepcopy(catalog)
+    selected = process_turn(ChatInput(conversation_id=conversation_id, message='StreamBox'), catalog)
+    assert catalog == before  # The caller, not the service, owns persistence.
+    if verified_state == 'active':
+        assert len(selected.result.proposals) == 1
+        proposal = selected.result.proposals[0]
+        assert proposal.tool.value == 'request_subscription_cancel'
+        assert proposal.arguments == {'subscription_id': 'sub_streambox'}
+        assert selected.state.pending_cancellation is None and selected.state.awaiting is None
+        assert len(selected.state.pending_tool_requests) == 1
+        assert selected.state.pending_tool_requests[0].proposal == proposal
+        assert 'nothing has been executed' in selected.result.reply
+    else:
+        assert not selected.result.proposals and selected.state == asked.state
+    assert 'confirmed completion' not in selected.result.reply
+
+
+def test_listing_candidate_does_not_authorize_cancellation_without_user_request(monkeypatch):
+    monkeypatch.setenv('AGENT_PROVIDER', 'mock')
+    catalog = demo_catalog()
+    chat = ChatInput(conversation_id='listing_no_cancel', message='List subscriptions')
+    listed = process_turn(chat, catalog)
+    save_state(catalog, listed)
+    proposal = listed.result.proposals[0]
+    result = dict(conversation_id=chat.conversation_id, proposal_id=proposal.proposal_id,
+        tool=proposal.tool.value, arguments=proposal.arguments, status='success',
+        data={'candidates': [dict(subscription_id='sub_streambox', merchant='StreamBox',
+            estimated_amount='39.00', cadence='monthly', confidence=0.99,
+            evidence_transaction_ids=['synthetic_tx'], cancellation_supported=True)]})
+    displayed = process_turn(chat, catalog, [result])
+    save_state(catalog, displayed)
+    bare_name = process_turn(ChatInput(conversation_id=chat.conversation_id, message='StreamBox'), catalog)
+    assert not bare_name.result.proposals and bare_name.state.pending_cancellation is None
+
+
 def start_cancellation(monkeypatch):
     monkeypatch.setenv('AGENT_PROVIDER', 'mock')
     catalog = demo_catalog()
