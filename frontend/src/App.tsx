@@ -138,6 +138,7 @@ export default function App() {
           🔄 Refresh Balances
         </button>
       </p>
+      {loading && <p style={{ color: '#666', fontStyle: 'italic' }}>⏳ Loading live data from bank vault...</p>}
 
       {error && (
         <div style={{ padding: '12px', background: '#ffebee', color: '#c62828', borderRadius: '4px', marginBottom: '16px' }}>
