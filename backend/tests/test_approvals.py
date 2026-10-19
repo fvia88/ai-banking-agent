@@ -119,3 +119,27 @@ def test_mfa_rate_limit_locks_after_three_failed_attempts(client, db_session):
     resp3 = client.post(f"/api/v1/actions/{action_id}/verify", json={"verification_code": "222222"}, headers={"X-Demo-User-Id": "usr_demo_01"})
     assert resp3.status_code == 400
     assert "FAILED" in resp3.json()["detail"]
+
+def test_confirm_with_explicit_idempotency_key(client):
+    """Verifies ConfirmActionRequest accepts and executes with an idempotency_key."""
+    chat_resp = client.post("/api/v1/chat", json={
+        "conversation_id": "c_idemp_key",
+        "message": "Transfer 500 CNY to Bob"
+    }, headers={"X-Demo-User-Id": "usr_demo_01"})
+    
+    action = chat_resp.json()["actions"][0]
+    action_id = action["arguments"]["action_id"]
+    digest = action["arguments"]["action_digest"]
+
+    # Confirm with both confirmation_id and idempotency_key
+    confirm_resp = client.post(
+        f"/api/v1/actions/{action_id}/confirm",
+        json={
+            "confirmation_id": "conf_test_01",
+            "action_digest": digest,
+            "idempotency_key": "idemp_custom_uuid_999"
+        },
+        headers={"X-Demo-User-Id": "usr_demo_01"}
+    )
+    assert confirm_resp.status_code == 200
+    assert confirm_resp.json()["status"] == ActionStatus.COMPLETED.value

@@ -16,6 +16,7 @@ router = APIRouter()
 class ConfirmActionRequest(BaseModel):
     confirmation_id: str
     action_digest: str
+    idempotency_key: str | None = None
 
 class VerifyActionRequest(BaseModel):
     verification_code: str

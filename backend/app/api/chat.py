@@ -17,13 +17,14 @@ def handle_chat(
     user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    if user.is_locked:
-        raise HTTPException(status_code=403, detail="Account is locked. State-changing actions blocked.")
 
-    # 1. Generate proposal via adapter
-    result = agent_service.process(chat_input)
+    # 1. Fetch user's account IDs and generate proposal via adapter
+    user_accounts = db.query(AccountModel).filter(AccountModel.user_id == user.user_id).all()
+    account_ids = [acc.account_id for acc in user_accounts] or ["acc_cny_001"]
 
-    # 2. If the AI proposed an action, save it to the DB with a cryptographic digest
+    result = agent_service.process(chat_input, account_ids=account_ids)
+
+    # 2. If the AI proposed an action, evaluate policy and save if allowed
     if result.proposals:
         primary_account = db.query(AccountModel).filter(AccountModel.user_id == user.user_id).first()
         source_account_id = primary_account.account_id if primary_account else "acc_cny_001"
@@ -39,17 +40,26 @@ def handle_chat(
         )
 
         for proposal in result.proposals:
-            action_record, digest, tier = create_action_record(
-                user_id=user.user_id,
-                proposal=proposal,
-                source_account_id=source_account_id,
-                context=context
-            )
-            db.add(action_record)
-            
-            proposal.arguments["action_id"] = action_record.action_id
-            proposal.arguments["action_digest"] = digest
-            proposal.arguments["tier"] = tier
+            try:
+                action_record, digest, tier = create_action_record(
+                    user_id=user.user_id,
+                    proposal=proposal,
+                    source_account_id=source_account_id,
+                    context=context
+                )
+                db.add(action_record)
+                
+                proposal.arguments["action_id"] = action_record.action_id
+                proposal.arguments["action_digest"] = digest
+                proposal.arguments["tier"] = tier
+            except ValueError as e:
+                # If policy blocks action (e.g. ACCOUNT_LOCKED), reject gracefully
+                return ChatOutput(
+                    conversation_id=chat_input.conversation_id,
+                    reply=f"Action blocked: Your account is currently locked for state-changing operations.",
+                    actions=[],
+                    status=ActionStatus.REJECTED
+                )
 
         db.commit()
         status = ActionStatus.PENDING_CONFIRMATION
