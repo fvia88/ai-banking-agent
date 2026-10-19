@@ -1,5 +1,64 @@
 # Memory trial 1
 
+## P1 rehearsal - one command (2026-10-19)
+
+From the repository root:
+
+```powershell
+agent/.venv/Scripts/python.exe -m pytest -p no:cacheprovider agent/tests/test_conversation_acceptance.py::test_p1_rehearsal -q -s
+```
+
+This runs a scripted demo against the actual agent service and asserts the
+expected behaviour. It is offline, uses mock interpretation and synthetic
+fixtures, and prints the conversation without requiring you to type each turn.
+Expected ending: `PASS: all rehearsal checks passed` followed by `1 passed`.
+An assertion failure stops the demo instead of reporting a successful rehearsal.
+No new runtime command or backend connection was added.
+
+### What to show and say (about 3 minutes)
+
+| Stage | What appears | Suggested explanation |
+| --- | --- | --- |
+| Spending | Missing-month question, October proposal, wrong-month result rejection, then CNY 1843.00 | "The agent remembers the requested month and only reports figures after receiving a matching tool result. This figure is synthetic fixture data." |
+| Transfer | Alice -> amount 500 -> Alice Chen -> exact transfer proposal | "It retains accepted details and resolves an ambiguous recipient before proposing anything. This does not move money." |
+| Cancellation | Missing subscription -> StreamBox -> cancellation proposal | "The selection is checked against verified subscription context. The backend will own confirmation and execution." |
+| Safety | Transfer 0 rejected, then never mind clears the draft | "Invalid amounts cannot produce a transfer proposal. Discarding a draft is different from cancelling an executed action." |
+
+The generic safety reply during the wrong-month report is intentional: the
+script explains why it was rejected, verifies the pending request survived,
+and then supplies the corrected report. Separate conversation IDs/catalogs are
+used for the stages. This is a P1 module demo, not an integrated app or the
+competition's connected cancellation-to-transfer scenario.
+
+### Optional live interpretation segment
+
+```powershell
+agent/.venv/Scripts/python.exe -m agent.cli --interactive --provider gemini
+```
+
+Enter these lines one at a time:
+
+```text
+Where did my money go?
+2026-10
+Could you send money to Alice?
+500
+Alice Chen
+Cancel my subscription
+StreamBox
+quit
+```
+
+Expected proposals: October spending lookup; 500.00 CNY transfer to
+recipient_alice; cancellation of sub_streambox. Only exact follow-up answers are
+handled locally; Gemini interprets the initial requests. Interactive mode does
+not resolve tool results, so it must not report spending totals here.
+
+Keep the offline rehearsal available if API access fails. A provider failure
+does not demonstrate a successful interpretation; record it separately and use
+the existing diagnose command if needed. The full offline suite after adding
+the rehearsal passed 315 tests, with one existing SDK Pydantic warning.
+
 ## Extension - cancellation selection memory
 
 ```powershell

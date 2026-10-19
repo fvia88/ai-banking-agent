@@ -6,6 +6,70 @@ from agent.mock_tools import demo_catalog
 from agent.service import process_turn
 import pytest
 from agent import service
+from copy import deepcopy
+from agent.mock_tools import read_result
+
+
+def test_p1_rehearsal(monkeypatch):
+    """Repeatable terminal demo and regression check; no network or mutations."""
+    monkeypatch.setenv('AGENT_PROVIDER', 'mock')
+    print('\nP1 REHEARSAL | mock interpretation | synthetic fixtures | no banking execution')
+
+    def send(catalog, conversation_id, message, results=None):
+        turn = process_turn(ChatInput(conversation_id=conversation_id, message=message), catalog, results)
+        save_state(catalog, turn)
+        print(f'You: {message}' if results is None else 'Caller: supplies synthetic tool result')
+        print('Agent:', turn.result.reply)
+        for proposal in turn.result.proposals:
+            print('Proposal:', proposal.tool.value, proposal.arguments)
+        return turn
+
+    print('\n1. SPENDING: clarification, rejected wrong-month result, accepted report')
+    spending = demo_catalog()
+    first = send(spending, 'rehearsal_spending', 'Analyze my spending')
+    assert first.result.needs_clarification and not first.result.proposals
+    proposed = send(spending, 'rehearsal_spending', '2026-10')
+    assert len(proposed.result.proposals) == 1
+    assert proposed.result.proposals[0].arguments == {'account_id': 'account_001', 'period': '2026-10'}
+    chat = ChatInput(conversation_id='rehearsal_spending', message='2026-10')
+    envelope = read_result(chat, proposed.result.proposals[0])
+    wrong_month = deepcopy(envelope)
+    wrong_month['data']['period'] = '2026-09'
+    rejected = send(spending, chat.conversation_id, chat.message, [wrong_month])
+    assert rejected.state == proposed.state and not rejected.result.proposals
+    assert '1843.00' not in rejected.result.reply
+    print('Check: September report rejected; October request remains pending.')
+    accepted = send(spending, chat.conversation_id, chat.message, [envelope])
+    assert accepted.result.reply == 'Verified spending for 2026-10: CNY 1843.00.'
+    assert not accepted.state.pending_tool_requests
+
+    print('\n2. TRANSFER: retain amount and resolve ambiguous Alice')
+    transfer = demo_catalog()
+    for message in ['Transfer to Alice', '500']:
+        turn = send(transfer, 'rehearsal_transfer', message)
+        assert turn.result.needs_clarification and not turn.result.proposals
+    turn = send(transfer, 'rehearsal_transfer', 'Alice Chen')
+    assert len(turn.result.proposals) == 1
+    assert turn.result.proposals[0].arguments == {'source_account_id': 'account_001',
+        'recipient_id': 'recipient_alice', 'amount': '500.00', 'currency': 'CNY'}
+
+    print('\n3. CANCELLATION: select verified subscription; proposal only')
+    cancellation = demo_catalog()
+    turn = send(cancellation, 'rehearsal_cancel', 'Cancel my subscription')
+    assert turn.result.needs_clarification and not turn.result.proposals
+    turn = send(cancellation, 'rehearsal_cancel', 'StreamBox')
+    assert len(turn.result.proposals) == 1
+    assert turn.result.proposals[0].tool.value == 'request_subscription_cancel'
+    assert turn.result.proposals[0].arguments == {'subscription_id': 'sub_streambox'}
+
+    print('\n4. SAFETY: invalid amount and abandoning an unfinished draft')
+    safety = demo_catalog()
+    turn = send(safety, 'rehearsal_safety', 'Transfer 0 to Bob')
+    assert turn.result.needs_clarification and not turn.result.proposals
+    turn = send(safety, 'rehearsal_safety', 'never mind')
+    assert not turn.result.proposals and turn.state.pending_transfer is None
+    assert turn.result.reply == 'Unfinished request discarded.'
+    print('\nPASS: all rehearsal checks passed. Transfers/cancellations were proposals only.')
 
 
 def save_state(catalog, turn):
