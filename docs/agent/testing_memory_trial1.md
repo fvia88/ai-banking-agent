@@ -2,6 +2,41 @@
 
 ## Spending report explanation
 
+### P3 merged-output validation (2026-10-19)
+
+Validated actual finance.analytics.analyze_spending output through the P1
+proposal/result round trip, rather than only the CLI's simple fixture aggregator.
+
+| Dataset | P3 report | P1 explanation check |
+| --- | --- | --- |
+| Shared transactions, October 2026 | CNY 1843.00; Shopping 1200.00, Food 360.00, Transport 125.00, Education 80.00, Subscriptions 58.00, Other 20.00; no anomalies | Total and largest three categories match; three further categories acknowledged; no anomalies invented. |
+| P3 synthetic transactions, September 2026 | CNY 9254.70; seven flags spanning six codes | Education 5800.00, Shopping 2680.00 and Dining 327.50 shown; first three flags shown and four further flags acknowledged. |
+
+Each of the six actual anomaly codes was also checked individually: category
+monthly spike, large versus category history, possible duplicate charge, large
+transaction with insufficient history, conflicting duplicate IDs and identical
+duplicate IDs. Explanations retain the transaction ID and distinction between a
+possible duplicate charge and duplicate input records. No source report is mutated.
+
+Remaining limits to confirm with P3:
+
+- The brief reply shows only three flags in P3's supplied order; it does not
+  independently rank them or expose a detail-view command.
+- Thresholds, ratios, merchant names and transaction amounts are not extracted
+  from free-text reasons. Ask for an agreed trusted transaction/detail format
+  before explaining those specifics. No invented baseline or merchant is added.
+- October diagnostics include CREDITS_EXCLUDED and REFUND_NOT_NETTED, but they
+  are separate from SpendingReport. The reply states default rules, not
+  report-specific diagnostic counts/amounts. Those details remain deferred.
+- These checks use P3's currently merged datasets, not the new example he plans
+  to send. Recheck his supplied example when it arrives.
+
+Run only these P3/P1 compatibility tests:
+
+```powershell
+agent/.venv/Scripts/python.exe -m pytest -p no:cacheprovider agent/tests/test_tool_results.py -q -k p3
+```
+
 ```powershell
 agent/.venv/Scripts/python.exe -m agent.cli 'Analyze spending 2026-10' --resolve-read
 ```

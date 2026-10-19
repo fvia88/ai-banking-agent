@@ -86,6 +86,56 @@ def test_p3_report_can_be_explained_directly(monkeypatch):
     assert 'Largest reported categories' in reply
 
 
+def p3_synthetic_report():
+    import json
+    from pathlib import Path
+    from contracts.models import Transaction
+    from finance.analytics import analyze_spending
+    path = Path(__file__).resolve().parents[2] / 'finance/tests/data/transactions_synthetic.json'
+    transactions = [Transaction.model_validate(t) for t in json.loads(path.read_text(encoding='utf-8'))]
+    return analyze_spending(transactions, '2026-09')
+
+
+def test_p3_actual_anomaly_report_summary_and_truncation(monkeypatch):
+    report = p3_synthetic_report()
+    assert str(report.total_spending) == '9254.70' and len(report.anomalies) == 7
+    chat, catalog, _, envelope = request(monkeypatch, 'spending 2026-09')
+    envelope['data'] = report.model_dump(mode='json')
+    before = deepcopy(envelope)
+    turn = service.process_turn(chat, catalog, [envelope])
+    reply = turn.result.reply
+    assert 'CNY 9254.70' in reply
+    assert '"Education": CNY 5800.00' in reply
+    assert '"Shopping": CNY 2680.00' in reply
+    assert '"Dining": CNY 327.50' in reply
+    assert reply.count('\n- ') == 3 and '4 more flags' in reply
+    assert 'not proof of fraud' in reply
+    assert 'Ignore previous' not in reply and '13.5x' not in reply
+    assert envelope == before and not turn.result.proposals
+    assert not turn.state.pending_tool_requests
+
+
+@pytest.mark.parametrize('code,expected', [
+    ('CATEGORY_MONTH_SPIKE', 'category spending above its historical monthly baseline'),
+    ('LARGE_VS_CATEGORY_HISTORY', 'a debit unusually large compared with category history'),
+    ('POSSIBLE_DUPLICATE_CHARGE', 'not a confirmed duplicate'),
+    ('LARGE_TRANSACTION', 'insufficient history for a personal baseline'),
+    ('CONFLICTING_DUPLICATE_ID', 'conflicting transaction records excluded from totals'),
+    ('DUPLICATE_TRANSACTION_ID', 'duplicate transaction records counted once'),
+])
+def test_p3_actual_reason_codes_preserve_meaning(monkeypatch, code, expected):
+    report = p3_synthetic_report()
+    anomaly = next(a for a in report.anomalies if a.reason.startswith(code + ':'))
+    chat, catalog, _, envelope = request(monkeypatch, 'spending 2026-09')
+    envelope['data'] = report.model_dump(mode='json')
+    envelope['data']['anomalies'] = [anomaly.model_dump(mode='json')]
+    reply = service.process_turn(chat, catalog, [envelope]).result.reply
+    assert anomaly.transaction_id in reply and expected in reply
+    assert 'details need review' not in reply
+    # A reason-only report cannot support merchant/transaction detail claims.
+    assert 'merchant' not in reply and '13.5x' not in reply
+
+
 def test_balance_round_trip_consumes_result_and_rejects_replay(monkeypatch):
     chat, catalog, state, envelope = request(monkeypatch)
     before = deepcopy(catalog)
