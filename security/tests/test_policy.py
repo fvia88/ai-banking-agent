@@ -549,6 +549,25 @@ def test_missing_required_arguments_rejected(default_context):
     assert decision.reason_code == SecurityReasonCode.INVALID_TOOL_ARGUMENTS
 
 
+def test_transfer_proposal_missing_source_account_id_rejected(default_context):
+    """Transfer proposal missing mandatory source_account_id must fail closed."""
+    proposal = ActionProposal(
+        proposal_id="prop_missing_src",
+        tool=ToolName.REQUEST_TRANSFER,
+        arguments={
+            "recipient_id": "recipient_alice",
+            "amount": "500.00",
+            "currency": "CNY",
+        },
+    )
+    decision = evaluate_action(proposal, default_context)
+    assert decision.tier == Tier.RED
+    assert decision.allowed_to_proceed is False
+    assert decision.requires_confirmation is False
+    assert decision.requires_mfa is False
+    assert decision.reason_code == SecurityReasonCode.INVALID_TOOL_ARGUMENTS
+
+
 def test_empty_string_id_rejected(default_context):
     """Empty string ID violates min_length=1 and is rejected."""
     proposal = ActionProposal(
@@ -743,6 +762,27 @@ def test_dict_context_fails_closed():
     assert decision.tier == Tier.RED
     assert decision.allowed_to_proceed is False
     assert decision.reason_code == SecurityReasonCode.INVALID_CONTEXT
+
+
+def test_internal_unexpected_exception_fails_closed(default_context, monkeypatch):
+    """Unexpected runtime exceptions must fail closed with Tier RED and INTERNAL_POLICY_ERROR."""
+
+    def _exploding_validator(*args, **kwargs):
+        raise RuntimeError("Simulated unexpected internal crash in policy engine")
+
+    monkeypatch.setattr("security.policy.validate_tool_arguments", _exploding_validator)
+
+    proposal = ActionProposal(
+        proposal_id="prop_crash",
+        tool=ToolName.GET_BALANCE,
+        arguments={"account_id": "account_001"},
+    )
+    decision = evaluate_action(proposal, default_context)
+    assert decision.tier == Tier.RED
+    assert decision.allowed_to_proceed is False
+    assert decision.requires_confirmation is False
+    assert decision.requires_mfa is False
+    assert decision.reason_code == SecurityReasonCode.INTERNAL_POLICY_ERROR
 
 
 # ============================================================================
@@ -1181,3 +1221,221 @@ def test_fixture_driven_expected_cases_matrix():
     assert d_t11.tier == Tier.RED
     assert d_t11.allowed_to_proceed is False
     assert d_t11.reason_code == SecurityReasonCode.ACCOUNT_LOCKED
+
+
+# ============================================================================
+# 17. INVALID POLICY CONFIGURATION (P4 Coverage Gap A)
+# ============================================================================
+
+
+def test_config_none_fails_closed(default_context):
+    """Passing config=None must fail closed with INTERNAL_POLICY_ERROR.
+
+    The policy engine relies on config attributes (e.g. enforce_account_matching).
+    A None config causes an AttributeError that must be caught by the outer
+    fail-closed except clause, returning Tier.RED, allowed_to_proceed=False,
+    and reason_code=INTERNAL_POLICY_ERROR.
+    """
+    proposal = ActionProposal(
+        proposal_id="prop_cfg_none",
+        tool=ToolName.GET_BALANCE,
+        arguments={"account_id": "account_001"},
+    )
+    decision = evaluate_action(proposal, default_context, config=None)
+    assert decision.tier == Tier.RED
+    assert decision.allowed_to_proceed is False
+    assert decision.requires_confirmation is False
+    assert decision.requires_mfa is False
+    assert decision.reason_code == SecurityReasonCode.INTERNAL_POLICY_ERROR
+
+
+def test_config_malformed_object_fails_closed(default_context):
+    """Passing a non-PolicyConfig object (plain string) as config must fail closed.
+
+    Any object without the expected PolicyConfig attributes triggers an
+    AttributeError inside the policy engine, which must be caught by the
+    outer fail-closed guard and returned as INTERNAL_POLICY_ERROR.
+    """
+    proposal = ActionProposal(
+        proposal_id="prop_cfg_malformed",
+        tool=ToolName.GET_BALANCE,
+        arguments={"account_id": "account_001"},
+    )
+    decision = evaluate_action(proposal, default_context, config="not_a_policy_config")
+    assert decision.tier == Tier.RED
+    assert decision.allowed_to_proceed is False
+    assert decision.requires_confirmation is False
+    assert decision.requires_mfa is False
+    assert decision.reason_code == SecurityReasonCode.INTERNAL_POLICY_ERROR
+
+
+# ============================================================================
+# 18. READ-ONLY ACCOUNT OWNERSHIP (P4 Coverage Gap B)
+# ============================================================================
+#
+# Both ANALYZE_SPENDING and LIST_SUBSCRIPTIONS schemas include an `account_id`
+# field (confirmed from contracts/tool_schemas.py and the JSON schemas).
+# Step 5 of the policy engine checks `hasattr(validated_args, "account_id")` for
+# tools that do NOT have `source_account_id`, making ownership enforcement apply
+# to all three read-only tools that carry an account_id.
+
+
+def test_analyze_spending_account_mismatch_rejected(default_context):
+    """ANALYZE_SPENDING with an account_id different from context.account_id is rejected.
+
+    Schema: AnalyzeSpendingArgs has `account_id` (ID) and `period` (str).
+    Policy Step 5 enforces tenancy: validated_args.account_id != context.account_id
+    => ACCOUNT_MISMATCH, Tier.RED, allowed_to_proceed=False.
+    """
+    proposal = ActionProposal(
+        proposal_id="prop_analyze_mismatch",
+        tool=ToolName.ANALYZE_SPENDING,
+        arguments={"account_id": "account_other_333", "period": "2026-10"},
+    )
+    decision = evaluate_action(proposal, default_context)
+    assert decision.tier == Tier.RED
+    assert decision.allowed_to_proceed is False
+    assert decision.requires_confirmation is False
+    assert decision.requires_mfa is False
+    assert decision.reason_code == SecurityReasonCode.ACCOUNT_MISMATCH
+
+
+def test_list_subscriptions_account_mismatch_rejected(default_context):
+    """LIST_SUBSCRIPTIONS with an account_id different from context.account_id is rejected.
+
+    Schema: ListSubscriptionsArgs has a single `account_id` (ID) field.
+    Policy Step 5 enforces tenancy: validated_args.account_id != context.account_id
+    => ACCOUNT_MISMATCH, Tier.RED, allowed_to_proceed=False.
+    """
+    proposal = ActionProposal(
+        proposal_id="prop_list_subs_mismatch",
+        tool=ToolName.LIST_SUBSCRIPTIONS,
+        arguments={"account_id": "account_other_444"},
+    )
+    decision = evaluate_action(proposal, default_context)
+    assert decision.tier == Tier.RED
+    assert decision.allowed_to_proceed is False
+    assert decision.requires_confirmation is False
+    assert decision.requires_mfa is False
+    assert decision.reason_code == SecurityReasonCode.ACCOUNT_MISMATCH
+
+
+# ============================================================================
+# 19. MONETARY EDGE CASES (P4 Coverage Gap C)
+# ============================================================================
+#
+# PositiveMoney is defined as: Decimal, Field(gt=0, max_digits=16, decimal_places=2)
+# The canonical TransferArgs.amount schema is an anyOf of:
+#   - number (exclusive_minimum=0)
+#   - string matching the PositiveMoney regex
+# Pydantic enforces max_digits=16 and decimal_places=2 on the resulting Decimal.
+
+
+def test_amount_exceeds_max_digits_rejected(default_context):
+    """An amount with more than 16 significant digits violates max_digits=16 and is rejected.
+
+    PositiveMoney: max_digits=16, decimal_places=2  =>  max 14 whole-number digits.
+    '999999999999999.00' has 15 whole-number digits (17 sig digits total) and must
+    fail Pydantic's decimal_whole_digits check, returning INVALID_TOOL_ARGUMENTS.
+    """
+    proposal = ActionProposal(
+        proposal_id="prop_max_digits",
+        tool=ToolName.REQUEST_TRANSFER,
+        arguments={
+            "source_account_id": "account_001",
+            "recipient_id": "recipient_alice",
+            "amount": "999999999999999.00",  # 15 whole digits => exceeds max_digits=16
+            "currency": "CNY",
+        },
+    )
+    decision = evaluate_action(proposal, default_context)
+    assert decision.tier == Tier.RED
+    assert decision.allowed_to_proceed is False
+    assert decision.requires_confirmation is False
+    assert decision.requires_mfa is False
+    assert decision.reason_code == SecurityReasonCode.INVALID_TOOL_ARGUMENTS
+
+
+def test_amount_nan_string_rejected(default_context):
+    """'NaN' as a transfer amount is rejected as non-finite by Pydantic's Decimal validation."""
+    proposal = ActionProposal(
+        proposal_id="prop_nan_str",
+        tool=ToolName.REQUEST_TRANSFER,
+        arguments={
+            "source_account_id": "account_001",
+            "recipient_id": "recipient_alice",
+            "amount": "NaN",
+            "currency": "CNY",
+        },
+    )
+    decision = evaluate_action(proposal, default_context)
+    assert decision.tier == Tier.RED
+    assert decision.allowed_to_proceed is False
+    assert decision.requires_confirmation is False
+    assert decision.requires_mfa is False
+    assert decision.reason_code == SecurityReasonCode.INVALID_TOOL_ARGUMENTS
+
+
+def test_amount_positive_infinity_string_rejected(default_context):
+    """'Inf' (positive infinity string) as a transfer amount is rejected as non-finite."""
+    proposal = ActionProposal(
+        proposal_id="prop_inf_str",
+        tool=ToolName.REQUEST_TRANSFER,
+        arguments={
+            "source_account_id": "account_001",
+            "recipient_id": "recipient_alice",
+            "amount": "Inf",
+            "currency": "CNY",
+        },
+    )
+    decision = evaluate_action(proposal, default_context)
+    assert decision.tier == Tier.RED
+    assert decision.allowed_to_proceed is False
+    assert decision.requires_confirmation is False
+    assert decision.requires_mfa is False
+    assert decision.reason_code == SecurityReasonCode.INVALID_TOOL_ARGUMENTS
+
+
+def test_amount_negative_infinity_string_rejected(default_context):
+    """'-Inf' (negative infinity string) as a transfer amount is rejected as non-finite."""
+    proposal = ActionProposal(
+        proposal_id="prop_neg_inf_str",
+        tool=ToolName.REQUEST_TRANSFER,
+        arguments={
+            "source_account_id": "account_001",
+            "recipient_id": "recipient_alice",
+            "amount": "-Inf",
+            "currency": "CNY",
+        },
+    )
+    decision = evaluate_action(proposal, default_context)
+    assert decision.tier == Tier.RED
+    assert decision.allowed_to_proceed is False
+    assert decision.requires_confirmation is False
+    assert decision.requires_mfa is False
+    assert decision.reason_code == SecurityReasonCode.INVALID_TOOL_ARGUMENTS
+
+
+def test_amount_negative_zero_string_rejected(default_context):
+    """'-0.00' (negative zero) as a transfer amount is rejected.
+
+    Pydantic parses '-0.00' to Decimal('-0.00'), which equals 0.  The gt=0
+    constraint on PositiveMoney (Input should be greater than 0) rejects it.
+    This test confirms fail-closed behavior for this degenerate numeric form.
+    """
+    proposal = ActionProposal(
+        proposal_id="prop_neg_zero",
+        tool=ToolName.REQUEST_TRANSFER,
+        arguments={
+            "source_account_id": "account_001",
+            "recipient_id": "recipient_alice",
+            "amount": "-0.00",
+            "currency": "CNY",
+        },
+    )
+    decision = evaluate_action(proposal, default_context)
+    assert decision.tier == Tier.RED
+    assert decision.allowed_to_proceed is False
+    assert decision.requires_confirmation is False
+    assert decision.requires_mfa is False
+    assert decision.reason_code == SecurityReasonCode.INVALID_TOOL_ARGUMENTS
