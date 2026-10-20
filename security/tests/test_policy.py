@@ -549,6 +549,25 @@ def test_missing_required_arguments_rejected(default_context):
     assert decision.reason_code == SecurityReasonCode.INVALID_TOOL_ARGUMENTS
 
 
+def test_transfer_proposal_missing_source_account_id_rejected(default_context):
+    """Transfer proposal missing mandatory source_account_id must fail closed."""
+    proposal = ActionProposal(
+        proposal_id="prop_missing_src",
+        tool=ToolName.REQUEST_TRANSFER,
+        arguments={
+            "recipient_id": "recipient_alice",
+            "amount": "500.00",
+            "currency": "CNY",
+        },
+    )
+    decision = evaluate_action(proposal, default_context)
+    assert decision.tier == Tier.RED
+    assert decision.allowed_to_proceed is False
+    assert decision.requires_confirmation is False
+    assert decision.requires_mfa is False
+    assert decision.reason_code == SecurityReasonCode.INVALID_TOOL_ARGUMENTS
+
+
 def test_empty_string_id_rejected(default_context):
     """Empty string ID violates min_length=1 and is rejected."""
     proposal = ActionProposal(
@@ -743,6 +762,27 @@ def test_dict_context_fails_closed():
     assert decision.tier == Tier.RED
     assert decision.allowed_to_proceed is False
     assert decision.reason_code == SecurityReasonCode.INVALID_CONTEXT
+
+
+def test_internal_unexpected_exception_fails_closed(default_context, monkeypatch):
+    """Unexpected runtime exceptions must fail closed with Tier RED and INTERNAL_POLICY_ERROR."""
+
+    def _exploding_validator(*args, **kwargs):
+        raise RuntimeError("Simulated unexpected internal crash in policy engine")
+
+    monkeypatch.setattr("security.policy.validate_tool_arguments", _exploding_validator)
+
+    proposal = ActionProposal(
+        proposal_id="prop_crash",
+        tool=ToolName.GET_BALANCE,
+        arguments={"account_id": "account_001"},
+    )
+    decision = evaluate_action(proposal, default_context)
+    assert decision.tier == Tier.RED
+    assert decision.allowed_to_proceed is False
+    assert decision.requires_confirmation is False
+    assert decision.requires_mfa is False
+    assert decision.reason_code == SecurityReasonCode.INTERNAL_POLICY_ERROR
 
 
 # ============================================================================
