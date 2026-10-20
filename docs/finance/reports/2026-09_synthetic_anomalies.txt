@@ -1,0 +1,39 @@
+source: finance/tests/data/transactions_synthetic.json
+Spending report 2026-09 (CNY)
+============================================
+Total spending: 9254.70
+
+By category:
+  Education           5800.00
+  Shopping            2680.00
+  Dining               327.50
+  Telecom              156.80
+  Groceries            128.00
+  Uncategorized         75.00
+  Transport             57.40
+  Subscriptions         30.00
+
+Monthly spending (empty months shown as 0.00):
+  2026-04         99.00
+  2026-05          0.00
+  2026-06        664.70
+  2026-07        601.90
+  2026-08        668.00
+  2026-09       9254.70
+  2026-10         60.00
+
+Anomalies in report (7):
+  - [P3-S05] CATEGORY_MONTH_SPIKE: 'Shopping' spending this month is 2680.00 CNY, 13.5x the 3-month average of 199.00 CNY; this is its largest debit.
+  - [P3-S06] CATEGORY_MONTH_SPIKE: 'Dining' spending this month is 327.50 CNY, 2.9x the 3-month average of 112.83 CNY; this is its largest debit.
+  - [P3-S05] LARGE_VS_CATEGORY_HISTORY: Debit of 2680.00 CNY is 13.5x the median (199.00 CNY) of 3 'Shopping' debits in the previous 3 months.
+  - [P3-S07] POSSIBLE_DUPLICATE_CHARGE: Same merchant, account and amount (88.00 CNY) as transaction P3-S06 within 10 minutes. Both are counted.
+  - [P3-S22] LARGE_TRANSACTION: Debit of 5800.00 CNY meets the 2000.00 CNY large-transaction threshold; 'Education' has too little history for a personal baseline.
+  - [P3-S13] CONFLICTING_DUPLICATE_ID: 2 records share this transaction ID but differ in content; all copies are excluded from totals until the source data is corrected.
+  - [P3-S12] DUPLICATE_TRANSACTION_ID: 2 identical records share this transaction ID; counted once.
+
+Notes (3):
+  - CREDITS_EXCLUDED: 2 credit inflow(s) totalling 15128.00 CNY are not spending and are excluded from all totals.
+  - REFUND_NOT_NETTED [P3-S09]: Refund credit of 128.00 CNY recorded; spending totals are gross and are not reduced by refunds.
+  - UNCATEGORIZED [P3-S15]: No usable category label or merchant rule; grouped as 'Uncategorized'.
+
+Descriptive analytics on synthetic data only; not financial advice.

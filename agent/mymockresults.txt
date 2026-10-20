@@ -1,0 +1,79 @@
+PS C:\Users\claine\Downloads\ai-banking-agent> (Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned) ; (& c:\Users\claine\Downloads\ai-banking-agent\agent\.venv\Scripts\Activate.ps1)
+(.venv) PS C:\Users\claine\Downloads\ai-banking-agent> $env:PYTHONDONTWRITEBYTECODE = '1'
+(.venv) PS C:\Users\claine\Downloads\ai-banking-agent> agent/.venv/Scripts/python.exe -m pytest -p no:cacheprovider tests/test_contracts.py agent/tests -q
+.........................................                         [100%]
+=========================== warnings summary ===========================
+agent\.venv\Lib\site-packages\google\genai\types.py:9562
+  C:\Users\claine\Downloads\ai-banking-agent\agent\.venv\Lib\site-packages\google\genai\types.py:9562: PydanticDeprecatedSince212: Using `@model_validator` with mode='after' on a classmethod is deprecated. Instead, usean instance method. See the documentation at https://docs.pydantic.dev/2.12/concepts/validators/#model-after-validator. Deprecated in Pydantic V2.12 to be removed in V3.0.
+    @model_validator(mode='after')  # type: ignore[arg-type]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+41 passed, 1 warning in 3.69s
+(.venv) PS C:\Users\claine\Downloads\ai-banking-agent> agent/.venv/Scripts/python.exe -m agent.cli 'What is my balance?' --resolve-read
+SYNTHETIC DEMO | provider=mock
+{
+  "reply": "I have proposed a read-only lookup. A verified tool result is needed before reporting figures.",
+  "proposals": [
+    {
+      "proposal_id": "e7475079-961d-4deb-b57f-64c0b2f20311",
+      "tool": "get_balance",
+      "arguments": {
+        "account_id": "account_001"
+      },
+      "rationale": "User requested this step; backend validation is required."
+    }
+  ],
+  "needs_clarification": false
+}
+{
+  "reply": "Verified balance: CNY 5000.00.",
+  "proposals": [],
+  "needs_clarification": false
+}
+(.venv) PS C:\Users\claine\Downloads\ai-banking-agent> agent/.venv/Scripts/python.exe -m agent.cli 'Analyze spending 2026-10' --resolve-read
+SYNTHETIC DEMO | provider=mock
+{
+  "reply": "I have proposed a read-only lookup. A verified tool result is needed before reporting figures.",
+  "proposals": [
+    {
+      "proposal_id": "9dbbbf87-6ed9-4d8d-8c26-68a4290cf400",
+      "tool": "analyze_spending",
+      "arguments": {
+        "account_id": "account_001",
+        "period": "2026-10"
+      },
+      "rationale": "User requested this step; backend validation is required."
+    }
+  ],
+  "needs_clarification": false
+}
+{
+  "reply": "Verified spending for 2026-10: CNY 1843.00.",
+  "proposals": [],
+  "needs_clarification": false
+}
+(.venv) PS C:\Users\claine\Downloads\ai-banking-agent> agent/.venv/Scripts/python.exe -m agent.cli 'Transfer 500 to Alice' --clarify 'Alice Chen'
+SYNTHETIC DEMO | provider=mock
+{
+  "reply": "Please specify the recipient's full name using the app's verified recipient list.",
+  "proposals": [],
+  "needs_clarification": true
+}
+{
+  "reply": "Request proposed. Backend approval and policy checks are required; nothing has been executed.",
+  "proposals": [
+    {
+      "proposal_id": "06cf00ac-935b-4d53-aef8-cc94c5569c50",
+      "tool": "request_transfer",
+      "arguments": {
+        "source_account_id": "account_001",
+        "recipient_id": "recipient_alice",
+        "amount": "500.00",
+        "currency": "CNY"
+      },
+      "rationale": "User requested this step; backend validation is required."
+    }
+  ],
+  "needs_clarification": false
+}
+(.venv) PS C:\Users\claine\Downloads\ai-banking-agent> 

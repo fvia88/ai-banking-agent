@@ -1,0 +1,27 @@
+source: fixtures/transactions.json
+Spending report 2026-10 (CNY)
+============================================
+Total spending: 1843.00
+
+By category:
+  Shopping            1200.00
+  Food                 360.00
+  Transport            125.00
+  Education             80.00
+  Subscriptions         58.00
+  Other                 20.00
+
+Monthly spending (empty months shown as 0.00):
+  2026-07         58.00
+  2026-08         58.00
+  2026-09        113.00
+  2026-10       1843.00
+
+Anomalies in report (0):
+  (none)
+
+Notes (2):
+  - CREDITS_EXCLUDED: 2 credit inflow(s) totalling 800.00 CNY are not spending and are excluded from all totals.
+  - REFUND_NOT_NETTED [tx_019]: Refund credit of 300.00 CNY recorded; spending totals are gross and are not reduced by refunds.
+
+Descriptive analytics on synthetic data only; not financial advice.

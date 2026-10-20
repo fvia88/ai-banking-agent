@@ -1,0 +1,22 @@
+# infra/Dockerfile.backend
+FROM python:3.11-slim
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH="/app/backend:/app"
+
+WORKDIR /app
+
+# Install Python requirements (uses pre-compiled wheels, no apt-get needed!)
+COPY backend/requirements.txt /app/backend/requirements.txt
+RUN pip install --no-cache-dir -r /app/backend/requirements.txt
+
+# Copy backend application and shared team contracts
+COPY backend/ /app/backend/
+COPY contracts/ /app/contracts/
+
+EXPOSE 8000
+
+# On container boot: seed database tables, then launch Uvicorn
+CMD ["sh", "-c", "python -m backend.app.db.seed && uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port 8000"]

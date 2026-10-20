@@ -8,3 +8,10 @@ __pycache__/
 .venv/
 venv/
 ENV/
+
+# Local SQLite databases
+*.db
+*.sqlite3
+
+# Environment files with private secrets
+.env
