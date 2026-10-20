@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 from decimal import Decimal
-from contracts.tool_schemas import TOOL_ARGUMENT_MODELS
+from contracts.tool_schemas import TOOL_ARGUMENT_MODELS, validate_tool_arguments
 
 ROOT = Path(__file__).resolve().parents[1] / "fixtures"
 
@@ -21,7 +21,7 @@ def demo_catalog():
 
 def read_result(chat, proposal):
     tool = proposal.tool.value
-    args = proposal.arguments
+    args = validate_tool_arguments(proposal.tool, proposal.arguments).model_dump(mode="json")
     if tool == "get_balance":
         data = next(a for a in load("accounts") if a["account_id"] == args["account_id"])
     elif tool == "analyze_spending":
@@ -38,4 +38,4 @@ def read_result(chat, proposal):
     else:
         raise ValueError("Mock tools never execute state-changing actions")
     return dict(conversation_id=chat.conversation_id, proposal_id=proposal.proposal_id,
-                tool=tool, status="success", data=data)
+                tool=tool, arguments=args, status="success", data=data)
