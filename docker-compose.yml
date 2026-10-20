@@ -2,6 +2,7 @@
 version: "3.9"
 
 services:
+  # --- 1. Database: PostgreSQL 16 ---
   postgres:
     image: postgres:16-alpine
     container_name: banking_postgres
@@ -14,7 +15,13 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U banking_user -d banking_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
+  # --- 2. Backend: FastAPI Application ---
   backend:
     build:
       context: .
@@ -22,11 +29,24 @@ services:
     container_name: banking_backend
     restart: always
     environment:
-      DATABASE_URL: postgresql://banking_user:banking_password@postgres:5432/banking_db
+      DATABASE_URL: postgresql+psycopg2://banking_user:banking_password@postgres:5432/banking_db
     ports:
       - "8000:8000"
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
+
+  # --- 3. Frontend: React App served via Nginx ---
+  frontend:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.frontend
+    container_name: banking_frontend
+    restart: always
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
 
 volumes:
   pgdata:

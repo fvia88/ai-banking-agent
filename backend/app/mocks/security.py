@@ -10,8 +10,8 @@ class MockSecurityAdapter:
     """
     @staticmethod
     def evaluate_action(proposal: ActionProposal, context: BankingContext) -> PolicyDecision:
-        # Rule 1: Account lock blocks all state-changing actions (Test Vector T11)
-        if context.account_locked:
+        # Rule 1: State-changing operations blocked if account is locked (Test Vector T11)
+        if context.account_locked and proposal.tool in [ToolName.REQUEST_TRANSFER, ToolName.REQUEST_SUBSCRIPTION_CANCEL]:
             return PolicyDecision(
                 tier=Tier.RED,
                 allowed_to_proceed=False,
@@ -26,7 +26,6 @@ class MockSecurityAdapter:
             daily_total = Decimal(str(context.daily_transfer_total))
             projected_total = daily_total + amount
 
-            # Transfers with daily cumulative total > 1,000 CNY -> RED (MFA required)
             if projected_total > Decimal("1000.00"):
                 return PolicyDecision(
                     tier=Tier.RED,
@@ -36,7 +35,6 @@ class MockSecurityAdapter:
                     reason_code="TRANSFER_EXCEEDS_DAILY_LIMIT_REQUIRES_MFA"
                 )
             
-            # Transfers with daily cumulative total <= 1,000 CNY -> YELLOW
             return PolicyDecision(
                 tier=Tier.YELLOW,
                 allowed_to_proceed=True,
@@ -55,7 +53,7 @@ class MockSecurityAdapter:
                 reason_code="SUBSCRIPTION_CANCEL_REQUIRES_CONFIRMATION"
             )
 
-        # Rule 4: Read-only queries -> GREEN (Automatic)
+        # Rule 4: Read-only queries -> GREEN (Automatic, allowed even if locked)
         return PolicyDecision(
             tier=Tier.GREEN,
             allowed_to_proceed=True,

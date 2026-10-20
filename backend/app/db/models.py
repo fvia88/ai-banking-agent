@@ -46,9 +46,11 @@ class AuditLogModel(Base):
     __tablename__ = "audit_logs"
     
     audit_id = Column(String(64), primary_key=True)
+    action_id = Column(String(64), nullable=True)
     user_id = Column(String(64), nullable=False)
     action_type = Column(String(64), nullable=False)
     payload_digest = Column(String(128), nullable=False)
+    reason_code = Column(String(64), default="SUCCESS", nullable=False)
     details = Column(Text, nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
@@ -56,6 +58,7 @@ class ActionApprovalModel(Base):
     __tablename__ = "action_approvals"
 
     action_id = Column(String(64), primary_key=True)
+    proposal_id = Column(String(64), nullable=True)
     user_id = Column(String(64), nullable=False)
     tool = Column(String(64), nullable=False)
     tier = Column(String(16), default="YELLOW", nullable=False)

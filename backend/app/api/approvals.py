@@ -4,18 +4,19 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from contracts.enums import ActionStatus, Tier
+from contracts.enums import ActionStatus, Tier, ToolName
 from contracts.models import ExecutionResult
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.db.models import UserModel, ActionApprovalModel, AuditLogModel
-from app.services.executor import execute_transfer
+from app.services.executor import execute_transfer, execute_subscription_cancel
 
 router = APIRouter()
 
 class ConfirmActionRequest(BaseModel):
     confirmation_id: str
     action_digest: str
+    idempotency_key: str | None = None
 
 class VerifyActionRequest(BaseModel):
     verification_code: str
@@ -90,14 +91,20 @@ def confirm_action(
         )
 
     # YELLOW Tier: Execute transfer atomically and complete
-    audit_id = execute_transfer(db, user, record)
+    if record.tool == ToolName.REQUEST_SUBSCRIPTION_CANCEL.value:
+        audit_id = execute_subscription_cancel(db, user, record)
+        message = "Subscription cancellation confirmed and executed successfully."
+    else:
+        audit_id = execute_transfer(db, user, record)
+        message = "Action confirmed and executed successfully."
+
     record.status = ActionStatus.COMPLETED.value
     db.commit()
 
     return ExecutionResult(
         action_id=record.action_id,
         status=ActionStatus.COMPLETED,
-        message="Action confirmed and executed successfully.",
+        message=message,
         audit_id=audit_id
     )
 

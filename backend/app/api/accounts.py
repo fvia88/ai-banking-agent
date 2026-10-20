@@ -5,29 +5,28 @@ from pydantic import BaseModel
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.db.models import UserModel, AccountModel
+from decimal import Decimal
+from contracts.models import Account
+from contracts.api_schemas import AccountsResponse
 
 router = APIRouter()
 
-class AccountResponse(BaseModel):
-    account_id: str
-    account_number: str
-    currency: str
-    balance: str
-    daily_transfer_total: str
-
-@router.get("/accounts", response_model=list[AccountResponse])
+@router.get("/accounts", response_model=AccountsResponse)
 def list_accounts(
     user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    accounts = db.query(AccountModel).filter(AccountModel.user_id == user.user_id).all()
-    return [
-        AccountResponse(
-            account_id=acc.account_id,
-            account_number=acc.account_number,
-            currency=acc.currency,
-            balance=f"{acc.balance:.2f}",
-            daily_transfer_total=f"{acc.daily_transfer_total:.2f}"
-        )
-        for acc in accounts
-    ]
+    records = db.query(AccountModel).filter(AccountModel.user_id == user.user_id).all()
+    
+    return AccountsResponse(
+        accounts=[
+            Account(
+                account_id=acc.account_id,
+                user_id=acc.user_id,
+                currency="CNY",
+                balance=Decimal(str(acc.balance)),
+                locked=user.is_locked
+            )
+            for acc in records
+        ]
+    )
