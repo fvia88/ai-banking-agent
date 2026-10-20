@@ -1,0 +1,14 @@
+{
+  "period": "2026-10",
+  "currency": "CNY",
+  "total_spending": "1843.00",
+  "category_totals": {
+    "Education": "80.00",
+    "Food": "360.00",
+    "Other": "20.00",
+    "Shopping": "1200.00",
+    "Subscriptions": "58.00",
+    "Transport": "125.00"
+  },
+  "anomalies": []
+}

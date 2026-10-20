@@ -52,7 +52,16 @@ including a 300.00 refund `tx_019`) are excluded and are **not** netted against 
     "period": "2026-09",
     "currency": "CNY",
     "total_spending": "9254.70",
-    "category_totals": { "...": "omitted" },
+    "category_totals": {
+      "Dining": "327.50",
+      "Education": "5800.00",
+      "Groceries": "128.00",
+      "Shopping": "2680.00",
+      "Subscriptions": "30.00",
+      "Telecom": "156.80",
+      "Transport": "57.40",
+      "Uncategorized": "75.00"
+    },
     "anomalies": [
       {"transaction_id": "P3-S05", "reason": "CATEGORY_MONTH_SPIKE: 'Shopping' spending this month is 2680.00 CNY, 13.5x the 3-month average of 199.00 CNY; this is its largest debit."},
       {"transaction_id": "P3-S05", "reason": "LARGE_VS_CATEGORY_HISTORY: Debit of 2680.00 CNY is 13.5x the median (199.00 CNY) of 3 'Shopping' debits in the previous 3 months."},
@@ -71,7 +80,8 @@ The transactions these flags refer to:
 ```
 
 The full 2026-09 report has 7 anomalies, including data-quality flags such as
-`DUPLICATE_TRANSACTION_ID`. Only 3 are shown here.
+`DUPLICATE_TRANSACTION_ID`. Only 3 are shown here. The complete saved outputs are in
+[`reports/`](reports/), alongside the October report and the test results.
 
 ## Field guide
 
