@@ -116,3 +116,14 @@ the transaction containing an injected instruction are not reported.
   `detector.py`, chosen without organizer-provided thresholds.
 * Currency is assumed to be CNY, as in contracts v1.
 * All data is synthetic. No real bank or merchant is contacted.
+
+
+## Agreed with P2 (milestone 2)
+
+* The detector returns **every** candidate with its raw confidence score and does
+  no filtering of its own.
+* The backend treats confidence `>= 0.7` as an **active** subscription and
+  `< 0.7` as a **possible** subscription (test vector T08).
+* `ELIGIBLE` and `CANCELLATION_NOT_SUPPORTED` are the only reason codes; the
+  backend maps them to user-facing messages.
+* Integration details will be discussed at the milestone 2 meeting.

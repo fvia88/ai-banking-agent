@@ -156,3 +156,18 @@ def test_fixture_transactions_find_streambox_and_cloudmusic_only():
     assert by_id["sub_cloudmusic"].estimated_amount == Decimal("19.00")
     assert all(c.cadence == Cadence.MONTHLY for c in report.candidates)
     assert all(len(c.evidence_transaction_ids) == 4 for c in report.candidates)
+
+
+
+
+def test_active_cutoff_of_0_7_separates_weak_from_clear_evidence():
+    # Agreed with P2: backend treats confidence >= 0.7 as active, < 0.7 as possible.
+    two = only(detect_subscriptions(monthly("A", months=(1, 2)))).confidence
+    three = only(detect_subscriptions(monthly("A", months=(1, 2, 3)))).confidence
+    assert two < 0.7 <= three
+
+
+def test_three_charges_with_price_wobble_stay_below_active_cutoff():
+    txs = [tx("w1", "S", 14, "39.00", month=1), tx("w2", "S", 14, "39.00", month=2),
+           tx("w3", "S", 14, "40.00", month=3)]
+    assert only(detect_subscriptions(txs)).confidence < 0.7
