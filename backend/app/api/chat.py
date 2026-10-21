@@ -1,5 +1,4 @@
 # backend/app/api/chat.py
-import json
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -15,6 +14,8 @@ from app.services.session_store import (
     get_conversation_state,
     set_conversation_state,
     clear_conversation_state,
+    conversation_key,
+    conversation_session,
 )
 from decimal import Decimal
 from contracts.models import Account, Transaction
@@ -27,6 +28,14 @@ def handle_chat(
     user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+  state_key = (conversation_key(user.user_id, chat_input.conversation_id)
+               if not agent_service.use_mock else chat_input.conversation_id)
+  # Keep the lock until all processing/result handling and state saves finish.
+  with conversation_session(state_key):
+    return _handle_chat_turn(chat_input, user, db, state_key)
+
+
+def _handle_chat_turn(chat_input: ChatInput, user: UserModel, db: Session, state_key: str):
   # 1. Draft Abandonment ("never mind" / "nevermind")
   if agent_service.use_mock and chat_input.message.strip().lower() in ["never mind", "nevermind"]:
     clear_conversation_state(chat_input.conversation_id)
@@ -39,10 +48,7 @@ def handle_chat(
 
   # 2. Retrieve conversation memory
   real_agent = not agent_service.use_mock
-  # Namespaced keys isolate real P1 snapshots by resolved user AND conversation.
-  # Session-store persistence/locking remains a separate integration step.
-  state_key = (json.dumps(["p1", user.user_id, chat_input.conversation_id])
-               if real_agent else chat_input.conversation_id)
+  # The route holds the session lock for this entire read/process/write cycle.
   saved_state = get_conversation_state(state_key)
   clarification_req = saved_state.get("clarification_request")
 

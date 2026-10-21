@@ -1,15 +1,91 @@
 import os
-import json
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 import pytest
 from decimal import Decimal
 from contracts.enums import ActionStatus, ToolName
 from app.services.adapters import agent_service
 from app.db.models import AccountModel
-from app.services.session_store import get_conversation_state
+from app.services.session_store import (get_conversation_state, set_conversation_state,
+    clear_conversation_state, conversation_key, conversation_session)
 
 
 def saved_p1_state(conversation_id, user_id='usr_demo_01'):
-    return get_conversation_state(json.dumps(['p1', user_id, conversation_id]))
+    return get_conversation_state(conversation_key(user_id, conversation_id))
+
+
+def test_session_snapshots_are_copied_on_save_and_load():
+    key = conversation_key('snapshot_user', 'snapshot_conversation')
+    original = {'pending_transfer': {'amount': '500.00'}, 'pending_tool_requests': []}
+    set_conversation_state(key, original)
+    original['pending_transfer']['amount'] = '900.00'
+    original['pending_tool_requests'].append({'untrusted': True})
+    loaded = get_conversation_state(key)
+    assert loaded == {'pending_transfer': {'amount': '500.00'}, 'pending_tool_requests': []}
+    loaded['pending_transfer']['amount'] = '1.00'
+    assert get_conversation_state(key)['pending_transfer']['amount'] == '500.00'
+    clear_conversation_state(key)
+    assert get_conversation_state(key) == {}
+
+
+def test_session_keys_do_not_collide_on_user_conversation_boundaries():
+    assert conversation_key('a:b', 'c') != conversation_key('a', 'b:c')
+    assert conversation_key('user_a', 'same') != conversation_key('user_b', 'same')
+
+
+def test_session_lock_is_released_after_processing_error():
+    key = conversation_key('error_user', 'error_conversation')
+    with pytest.raises(RuntimeError):
+        with conversation_session(key):
+            raise RuntimeError('synthetic processing failure')
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pool.submit(set_conversation_state, key, {'recovered': True}).result(timeout=5)
+    assert get_conversation_state(key) == {'recovered': True}
+    clear_conversation_state(key)
+
+
+def test_chat_serializes_whole_turn_for_same_session(client, monkeypatch):
+    from app.api import chat as chat_api
+    from app.api.deps import get_current_user
+    from app.db.models import UserModel
+    from app.main import app
+    from contracts.models import ChatOutput
+    user = UserModel(user_id='parallel_user', username='Synthetic parallel user', is_locked=False)
+    # The handler is isolated from SQLAlchemy here: this test verifies the route's
+    # session boundary, not concurrent use of the fixture's single DB connection.
+    monkeypatch.setitem(app.dependency_overrides, get_current_user, lambda: user)
+    first_loaded, release_first, second_started, second_entered = (Event() for _ in range(4))
+    key = conversation_key(user.user_id, 'parallel_conversation')
+    clear_conversation_state(key)
+    def controlled_turn(chat_input, resolved_user, db, state_key):
+        assert resolved_user.user_id == user.user_id and state_key == key
+        snapshot = get_conversation_state(state_key)
+        if chat_input.message == 'first':
+            first_loaded.set()
+            assert release_first.wait(timeout=5)
+        else:
+            second_entered.set()
+        count = snapshot.get('turn_count', 0) + 1
+        set_conversation_state(state_key, {'turn_count': count})
+        return ChatOutput(conversation_id=chat_input.conversation_id, reply=str(count),
+                          actions=[], status=ActionStatus.COMPLETED)
+    monkeypatch.setattr(chat_api, '_handle_chat_turn', controlled_turn)
+    def second_request():
+        second_started.set()
+        return post_chat(client, 'parallel_conversation', 'second', user.user_id)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(post_chat, client, 'parallel_conversation', 'first', user.user_id)
+        try:
+            assert first_loaded.wait(timeout=5)
+            second = pool.submit(second_request)
+            assert second_started.wait(timeout=5)
+            assert not second_entered.wait(timeout=0.1)
+        finally:
+            release_first.set()
+        assert first.result(timeout=5)['reply'] == '1'
+        assert second.result(timeout=5)['reply'] == '2'
+    assert get_conversation_state(key) == {'turn_count': 2}
+    clear_conversation_state(key)
 
 
 def post_chat(client, conversation_id, message, user_id='usr_demo_01'):
