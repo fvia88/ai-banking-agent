@@ -69,3 +69,8 @@ class ActionApprovalModel(Base):
     failed_attempts = Column(Numeric(2, 0), default=0, nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     expires_at = Column(DateTime, nullable=False)
+    # P3 MFA challenge lifecycle (see app/services/mfa.py)
+    mfa_issued_at = Column(DateTime, nullable=True)
+    mfa_expires_at = Column(DateTime, nullable=True)
+    mfa_consumed_at = Column(DateTime, nullable=True)
+    audit_id = Column(String(64), nullable=True)  # Execution audit entry, returned on idempotent replay

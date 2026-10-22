@@ -72,10 +72,12 @@ def test_t03_red_tier_flow_requires_mfa_and_completes(client, db_session):
     assert confirm_resp.status_code == 200
     assert confirm_resp.json()["status"] == ActionStatus.PENDING_MFA.value
 
-    # 4. Verify with the demo code '123456' -> Expect COMPLETED
+    # 4. Verify with the code from the demo inbox -> Expect COMPLETED
+    inbox = client.get("/api/v1/demo/otp-inbox", headers={"X-Demo-User-Id": "usr_demo_01"}).json()
+    code = next(m["code"] for m in inbox if m["action_id"] == action_id)
     verify_resp = client.post(
         f"/api/v1/actions/{action_id}/verify",
-        json={"verification_code": "123456"},
+        json={"verification_code": code},
         headers={"X-Demo-User-Id": "usr_demo_01"}
     )
     assert verify_resp.status_code == 200
