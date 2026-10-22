@@ -1,5 +1,5 @@
 # backend/app/api/transactions.py
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
@@ -12,31 +12,47 @@ from app.db.models import UserModel, AccountModel, TransactionModel
 
 router = APIRouter()
 
+CST = timezone(timedelta(hours=8))
+
+def get_month_boundaries_cst(period: str) -> tuple[datetime, datetime]:
+    """Calculates start and end datetime in Asia/Shanghai (+08:00) for a given YYYY-MM."""
+    year, month = map(int, period.split("-"))
+    start_dt = datetime(year, month, 1, 0, 0, 0, tzinfo=CST)
+    
+    # Calculate start of next month
+    if month == 12:
+        end_dt = datetime(year + 1, 1, 1, 0, 0, 0, tzinfo=CST)
+    else:
+        end_dt = datetime(year, month + 1, 1, 0, 0, 0, tzinfo=CST)
+        
+    return start_dt, end_dt
+
 @router.get("/transactions", response_model=TransactionsResponse)
 def get_transactions(
     period: str | None = Query(default=None, pattern=r"^\d{4}-(0[1-9]|1[0-2])$"),
     user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    query = (
+    records = (
         db.query(TransactionModel)
         .join(AccountModel, TransactionModel.account_id == AccountModel.account_id)
         .filter(AccountModel.user_id == user.user_id)
+        .order_by(TransactionModel.timestamp.desc())
+        .all()
     )
-    if period:
-        query = query.filter(TransactionModel.timestamp.startswith(period))
-        
-    records = query.order_by(TransactionModel.timestamp.desc()).all()
     
+    start_dt, end_dt = get_month_boundaries_cst(period) if period else (None, None)
     parsed_transactions = []
+
     for r in records:
-        # 1. Parse timestamp and guarantee timezone is present
         ts = datetime.fromisoformat(r.timestamp)
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
 
-        # 2. Map direction string to Direction enum safely
-        direction_val = Direction(r.direction.lower())
+        # Precise timezone-aware month boundary filtering
+        if start_dt and end_dt:
+            if not (start_dt <= ts < end_dt):
+                continue
 
         parsed_transactions.append(
             Transaction(
@@ -44,7 +60,7 @@ def get_transactions(
                 account_id=r.account_id,
                 timestamp=ts,
                 amount=Decimal(str(r.amount)),
-                direction=direction_val,
+                direction=Direction(r.direction.lower()),
                 merchant=r.merchant,
                 category=r.category,
                 note=""

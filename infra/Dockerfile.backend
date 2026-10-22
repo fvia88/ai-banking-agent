@@ -10,14 +10,20 @@ WORKDIR /app
 
 # Install Python requirements (uses pre-compiled wheels, no apt-get needed!)
 COPY backend/requirements.txt /app/backend/requirements.txt
-RUN pip install --no-cache-dir -r /app/backend/requirements.txt
+COPY agent/requirements.txt /app/agent/requirements.txt
+RUN python -m pip install --no-cache-dir --timeout 120 --retries 10 \
+    -r /app/backend/requirements.txt -r /app/agent/requirements.txt
 
 # Copy backend application and shared team contracts
 COPY backend/ /app/backend/
 COPY contracts/ /app/contracts/
+COPY agent/ /app/agent/
 COPY finance/ /app/finance/
+COPY security/ /app/security/
+COPY subscriptions/ /app/subscriptions/
+COPY fixtures/ /app/fixtures/
 
 EXPOSE 8000
 
-# On container boot: seed database tables, then launch Uvicorn
+# Seed an empty demo database; preserve existing data on subsequent starts.
 CMD ["sh", "-c", "python -m backend.app.db.seed && uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port 8000"]

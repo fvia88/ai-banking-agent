@@ -1,3 +1,5 @@
+# hello from claine
+# hello 2
 # backend/app/services/adapters.py
 import os
 from contracts.models import ChatInput, AgentResult, ActionProposal, BankingContext, PolicyDecision, Transaction, SpendingReport, SubscriptionReport
@@ -6,10 +8,13 @@ from app.mocks.agent import MockAgentAdapter
 from app.mocks.security import MockSecurityAdapter
 from app.mocks.finance import MockFinanceAdapter
 from app.mocks.subscriptions import MockSubscriptionsAdapter
-from typing import Any
+from typing import Any, TYPE_CHECKING
 from decimal import Decimal
 from contracts.enums import ToolName, Cadence
 from datetime import datetime
+
+if TYPE_CHECKING:
+    from agent.conversation import ConversationTurn
 
 def build_tool_catalog(
     account_id: str | None = None,
@@ -20,12 +25,18 @@ def build_tool_catalog(
     pending_proposal_ids: list[str] | None = None,
     conversation_state: dict[str, Any] | None = None,
     clarification_request: str | None = None,
+    allow_demo_defaults: bool = True,
 ) -> list[dict[str, Any]]:
     """
     Builds the canonical tool catalog and context expected by Person 1's agent/service.py.
     """
     # Pick the primary account (P1 strictly requires exactly 1 account)
-    selected_account = account_id or (account_ids[0] if account_ids else None) or "acc_cny_001"
+    if allow_demo_defaults:
+        selected_accounts = [account_id or (account_ids[0] if account_ids else None) or "acc_cny_001"]
+    else:
+        # Real callers must supply the selected, owned account. Do not invent
+        # an account or silently select the first of several accounts.
+        selected_accounts = [account_id] if account_id else list(account_ids or [])
 
     default_recipients = [
         {
@@ -49,16 +60,16 @@ def build_tool_catalog(
     ]
 
     context: dict[str, Any] = {
-        "account_ids": [selected_account],  # Guaranteed len == 1 for P1
+        "account_ids": selected_accounts,
         "account_locked": account_locked,
-        "recipients": recipients if recipients is not None else default_recipients,
-        "subscriptions": subscriptions if subscriptions is not None else default_subscriptions,
+        "recipients": recipients if recipients is not None else (default_recipients if allow_demo_defaults else []),
+        "subscriptions": subscriptions if subscriptions is not None else (default_subscriptions if allow_demo_defaults else []),
         "pending_proposal_ids": pending_proposal_ids or [],
     }
 
     if clarification_request:
         context["clarification_request"] = clarification_request
-    if conversation_state:
+    if conversation_state is not None:
         context["conversation_state"] = conversation_state
 
     return [
@@ -107,10 +118,27 @@ class AgentAdapterService:
             return MockAgentAdapter.process_message(
                 chat, tool_catalog=tool_catalog, tool_results=tool_results
             )
+        # Legacy route compatibility: preserve its existing demo context and
+        # AgentResult return type until chat.py migrates to the stateful method.
+        from agent.service import process_turn as p1_process_turn
+        return p1_process_turn(chat, tool_catalog=tool_catalog, tool_results=tool_results).result
 
-        # Calls Person 1's real implementation in agent/service.py!
-        from agent.service import process_message as p1_process_message
-        return p1_process_message(chat, tool_catalog=tool_catalog, tool_results=tool_results)
+    def process_turn(
+        self, chat: ChatInput, *, tool_results: list[dict[str, Any]] | None = None,
+        **context: Any,
+    ) -> "ConversationTurn":
+        """Real P1 bridge; caller owns saving the returned state after every call.
+
+        Context keywords match build_tool_catalog. This never executes tools,
+        stores sessions, or turns pending IDs into fabricated proposal records.
+        """
+        if self.use_mock:
+            raise ValueError("process_turn requires USE_MOCK_AGENT=false or use_mock=False")
+        # Force real mode to use only caller-provided trusted context.
+        context.pop("allow_demo_defaults", None)
+        tool_catalog = build_tool_catalog(**context, allow_demo_defaults=False)
+        from agent.service import process_turn as p1_process_turn
+        return p1_process_turn(chat, tool_catalog=tool_catalog, tool_results=tool_results)
 
 class SecurityAdapterService:
     def __init__(self, use_mock: bool = True):
@@ -173,7 +201,7 @@ class SubscriptionsAdapterService:
         # return detect_subscriptions(transactions)
         return MockSubscriptionsAdapter.detect_subscriptions(transactions)
 
-agent_service = AgentAdapterService(use_mock=True)
+agent_service = AgentAdapterService()
 policy_service = SecurityAdapterService(use_mock=True)
 finance_service = FinanceAdapterService()
 subscriptions_service = SubscriptionsAdapterService(use_mock=True)

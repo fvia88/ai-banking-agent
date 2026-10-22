@@ -3,6 +3,26 @@ import re
 from decimal import Decimal
 
 
+def is_new_banking_request(message: str) -> bool:
+    """Recognize clear request framing, not keywords inside a field answer.
+
+    This only decides whether to release a draft. The provider still extracts
+    the new intent and normal proposal checks still apply. Ambiguous wording
+    remains a field answer; the user can always abandon it with 'never mind'.
+    """
+    if is_direct_request(message, "transfer") or is_direct_request(message, "cancel"):
+        return True
+    text = " ".join(message.strip().casefold().replace("’", "'").split())
+    # Read requests must also be direct, not quoted or hypothetical instructions.
+    if re.search(r'["“”`:]|\b(if|unless|not|never|example|hypothetical|imagine|pretend|merchant|note|says|said|instructions?)\b', text):
+        return False
+    prefix = r"(?:(?:please|(?:can|could|cld|would|will) (?:you|u)(?: please)?)\s+)?"
+    reads = (r"(?:(?:what is|what's|whats|show|check|get|tell me) (?:me )?(?:my |the )?balance"
+             r"|(?:analyze|analyse) (?:my |the )?spending"
+             r"|(?:list|show|get) (?:me )?(?:my |the )?subscriptions)\b")
+    return re.match(r"^" + prefix + reads, text) is not None
+
+
 def is_direct_request(message: str, intent: str) -> bool:
     text = " ".join(message.strip().casefold().replace("’", "'").split())
     # When framing is ambiguous, ask for a fresh explicit request. These checks
