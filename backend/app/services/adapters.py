@@ -173,16 +173,20 @@ def calculate_history_periods(period: str, extra_months: int = 3) -> list[str]:
 
 class FinanceAdapterService:
     """Bridge for Person 3's Finance Analytics engine."""
-    def __init__(self, use_mock: bool = True):
-        self.use_mock = use_mock
+    def __init__(self, use_mock: bool | None = None):
+        # Reads USE_MOCK_FINANCE env var (default: False -> real P3 engine)
+        if use_mock is not None:
+            self.use_mock = use_mock
+        else:
+            self.use_mock = os.getenv("USE_MOCK_FINANCE", "false").lower() == "true"
 
     def analyze(self, transactions: list[Transaction], period: str) -> SpendingReport:
         if self.use_mock:
             return MockFinanceAdapter.analyze_spending(transactions, period)
-        # When Person 3's code is merged:
-        # from finance.analytics import analyze_spending
-        # return analyze_spending(transactions, period)
-        return MockFinanceAdapter.analyze_spending(transactions, period)
+
+        # Calls Person 3's real implementation in finance/analytics.py
+        from finance.analytics import analyze_spending
+        return analyze_spending(transactions, period)
 
 class SubscriptionsAdapterService:
     """Bridge for Person 5's Subscription Detection engine."""
@@ -199,5 +203,5 @@ class SubscriptionsAdapterService:
 
 agent_service = AgentAdapterService()
 policy_service = SecurityAdapterService(use_mock=True)
-finance_service = FinanceAdapterService(use_mock=True)
+finance_service = FinanceAdapterService()
 subscriptions_service = SubscriptionsAdapterService(use_mock=True)
