@@ -56,10 +56,26 @@ def _red_action_pending_mfa(client, db_session, conversation_id):
     assert confirm_resp.status_code == 200
     assert confirm_resp.json()["status"] == ActionStatus.PENDING_MFA.value
     assert _balance(db_session) == START_BALANCE  # no debit after confirm
+    _issued_codes[action_id] = _inbox_code(client, action_id)
     return action_id, confirm_resp.json()
 
 
-def _verify(client, action_id, code=mfa.SIMULATED_OTP_CODE, headers=ALICE):
+_issued_codes: dict[str, str] = {}
+
+
+def _inbox_code(client, action_id, headers=ALICE):
+    """Read the code the way the demo user would: from their demo inbox."""
+    inbox = client.get("/api/v1/demo/otp-inbox", headers=headers).json()
+    return next(m["code"] for m in inbox if m["action_id"] == action_id)
+
+
+def _wrong_code(action_id):
+    real = _issued_codes[action_id]
+    return f"{(int(real) + 1) % 10 ** mfa.OTP_CODE_DIGITS:0{mfa.OTP_CODE_DIGITS}d}"
+
+
+def _verify(client, action_id, code=None, headers=ALICE):
+    code = code if code is not None else _issued_codes[action_id]
     return client.post(f"/api/v1/actions/{action_id}/verify", json={"verification_code": code}, headers=headers)
 
 
@@ -81,6 +97,42 @@ def test_red_transfer_debits_once_only_after_valid_mfa(client, db_session):
     record = _record(db_session, action_id)
     assert record.mfa_consumed_at is not None
     assert record.audit_id == resp.json()["audit_id"]
+
+
+def test_code_is_random_printed_to_console_and_not_in_confirm_response(client, db_session, capsys):
+    action_id, confirm_body = _red_action_pending_mfa(client, db_session, "c_mfa_delivery")
+    code = _issued_codes[action_id]
+
+    assert len(code) == mfa.OTP_CODE_DIGITS and code.isdigit()
+    assert code not in confirm_body["message"]
+    assert "demo inbox" in confirm_body["message"].lower()
+    assert f"action={action_id} code={code}" in capsys.readouterr().out
+
+    codes = {mfa.generate_code() for _ in range(20)}
+    assert len(codes) > 1
+
+
+def test_demo_inbox_is_owner_scoped_and_drops_used_codes(client, db_session):
+    db_session.add(UserModel(user_id="usr_other_02", username="Mallory", is_locked=False))
+    db_session.commit()
+    action_id, _ = _red_action_pending_mfa(client, db_session, "c_mfa_inbox")
+
+    inbox = client.get("/api/v1/demo/otp-inbox", headers=ALICE).json()
+    assert [m["action_id"] for m in inbox] == [action_id]
+    assert inbox[0]["attempts_remaining"] == mfa.MAX_FAILED_ATTEMPTS
+    assert client.get("/api/v1/demo/otp-inbox", headers={"X-Demo-User-Id": "usr_other_02"}).json() == []
+
+    assert _verify(client, action_id).status_code == 200
+    assert client.get("/api/v1/demo/otp-inbox", headers=ALICE).json() == []
+
+
+def test_demo_inbox_hides_expired_codes(client, db_session):
+    action_id, _ = _red_action_pending_mfa(client, db_session, "c_mfa_inbox_expired")
+    record = _record(db_session, action_id)
+    record.mfa_expires_at = mfa.utc_now() - timedelta(seconds=1)
+    db_session.commit()
+
+    assert client.get("/api/v1/demo/otp-inbox", headers=ALICE).json() == []
 
 
 def test_duplicate_verify_does_not_debit_twice_and_returns_same_audit_id(client, db_session):
@@ -148,9 +200,10 @@ def test_challenge_never_outlives_action():
 
 def test_third_wrong_code_fails_and_correct_code_cannot_recover(client, db_session):
     action_id, _ = _red_action_pending_mfa(client, db_session, "c_mfa_lockout")
-    assert "2 attempt(s) remaining" in _verify(client, action_id, "000000").json()["detail"]
-    assert "1 attempt(s) remaining" in _verify(client, action_id, "111111").json()["detail"]
-    third = _verify(client, action_id, "222222")
+    wrong = _wrong_code(action_id)
+    assert "2 attempt(s) remaining" in _verify(client, action_id, wrong).json()["detail"]
+    assert "1 attempt(s) remaining" in _verify(client, action_id, wrong).json()["detail"]
+    third = _verify(client, action_id, wrong)
     assert third.status_code == 400
     assert "FAILED" in third.json()["detail"]
 
@@ -240,6 +293,7 @@ def test_truly_concurrent_verifies_debit_once(tmp_path, monkeypatch):
         payload_json=json.dumps({"source_account_id": "acc_cny_001", "recipient_id": "rcp_bob", "amount": "500.00"}),
     )
     mfa.issue_challenge(record, now)
+    issued_code = record.verification_code
     setup.add(record)
     setup.commit()
     setup.close()
@@ -261,7 +315,7 @@ def test_truly_concurrent_verifies_debit_once(tmp_path, monkeypatch):
         try:
             user = session.query(UserModel).filter(UserModel.user_id == "usr_demo_01").first()
             result = approvals.verify_action(
-                "act_race", approvals.VerifyActionRequest(verification_code=mfa.SIMULATED_OTP_CODE),
+                "act_race", approvals.VerifyActionRequest(verification_code=issued_code),
                 user=user, db=session,
             )
             outcomes.append(("ok", result.status))

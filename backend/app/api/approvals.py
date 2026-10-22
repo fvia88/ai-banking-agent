@@ -106,8 +106,8 @@ def confirm_action(
             action_id=record.action_id,
             status=ActionStatus.PENDING_MFA,
             message=(
-                f"Strong verification (MFA) required. A simulated verification code ('{mfa.SIMULATED_OTP_CODE}') "
-                f"has been issued (no SMS/email is sent). It expires in {ttl_minutes} minutes; "
+                f"Strong verification (MFA) required. A one-time code has been sent to your demo inbox "
+                f"(simulated delivery; no SMS/email is sent). It expires in {ttl_minutes} minutes; "
                 f"{mfa.MAX_FAILED_ATTEMPTS} attempts allowed."
             ),
             audit_id=audit_id

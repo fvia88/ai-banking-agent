@@ -4,16 +4,20 @@ P3: simulated OTP / MFA challenge lifecycle for RED-tier actions.
 
 A challenge is bound to one ActionApprovalModel row (and therefore to its
 owner and its current state). It has an issue time, an expiry, a
-failed-attempt limit and a consumed marker. No SMS/email is sent: the code is
-a fixed, clearly labelled simulated value.
+failed-attempt limit and a consumed marker.
+
+Delivery is simulated (hackathon shortcut): no SMS/email is sent. Each code is
+a random 6-digit value printed to the backend console and shown in the
+owner's demo inbox (GET /api/v1/demo/otp-inbox).
 """
+import secrets
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from sqlalchemy.orm import Session
 from contracts.enums import ActionStatus
 from app.db.models import ActionApprovalModel
 
-SIMULATED_OTP_CODE = "123456"
+OTP_CODE_DIGITS = 6
 MFA_CODE_TTL = timedelta(minutes=5)
 MAX_FAILED_ATTEMPTS = 3
 
@@ -36,15 +40,39 @@ def as_utc(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
+def generate_code() -> str:
+    return f"{secrets.randbelow(10 ** OTP_CODE_DIGITS):0{OTP_CODE_DIGITS}d}"
+
+
+def deliver_to_demo_console(record: ActionApprovalModel) -> None:
+    """Simulated delivery channel: print the code where the demo operator can see it."""
+    print(
+        f"[DEMO OTP] user={record.user_id} action={record.action_id} "
+        f"code={record.verification_code} expires_at={as_utc(record.mfa_expires_at).isoformat()}",
+        flush=True,
+    )
+
+
 def issue_challenge(record: ActionApprovalModel, now: datetime) -> None:
     """Move the action to PENDING_MFA with a fresh challenge. Caller commits."""
     record.status = ActionStatus.PENDING_MFA.value
-    record.verification_code = SIMULATED_OTP_CODE
+    record.verification_code = generate_code()
     record.failed_attempts = 0
     record.mfa_issued_at = now
     # The challenge can never outlive the action proposal itself.
     record.mfa_expires_at = min(now + MFA_CODE_TTL, as_utc(record.expires_at))
     record.mfa_consumed_at = None
+    deliver_to_demo_console(record)
+
+
+def active_challenges(db: Session, user_id: str, now: datetime) -> list[ActionApprovalModel]:
+    """The user's demo inbox: unexpired, unused challenges still awaiting verification."""
+    pending = db.query(ActionApprovalModel).filter(
+        ActionApprovalModel.user_id == user_id,
+        ActionApprovalModel.status == ActionStatus.PENDING_MFA.value,
+        ActionApprovalModel.mfa_consumed_at.is_(None),
+    ).order_by(ActionApprovalModel.mfa_issued_at.desc()).all()
+    return [r for r in pending if r.mfa_expires_at is not None and as_utc(r.mfa_expires_at) > now]
 
 
 def remaining_attempts(record: ActionApprovalModel) -> int:
@@ -61,7 +89,7 @@ def check_challenge(record: ActionApprovalModel, code: str, now: datetime) -> Ch
         return ChallengeCheck.TOO_MANY_ATTEMPTS
     if as_utc(record.mfa_expires_at) <= now:
         return ChallengeCheck.EXPIRED
-    if code != record.verification_code:
+    if not secrets.compare_digest(str(code), record.verification_code):
         return ChallengeCheck.WRONG_CODE
     return ChallengeCheck.OK
 
