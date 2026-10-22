@@ -185,3 +185,20 @@ export async function fetchAuditLogs(): Promise<AuditResponse> {
   if (!res.ok) throw new Error(`Failed to fetch audit logs: ${res.statusText}`);
   return res.json();
 }
+
+export interface DemoInboxMessage {
+  action_id: string;
+  code: string;
+  expires_at: string;
+  attempts_remaining: number;
+  message: string;
+}
+
+// Simulated OTP delivery channel (no SMS/email is sent)
+export async function fetchDemoInbox(): Promise<DemoInboxMessage[]> {
+  const res = await fetch('/api/v1/demo/otp-inbox', {
+    headers: { 'X-Demo-User-Id': DEMO_USER_ID },
+  });
+  if (!res.ok) throw new Error(`Failed to fetch demo inbox: ${res.statusText}`);
+  return res.json();
+}

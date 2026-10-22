@@ -1,7 +1,7 @@
 // frontend/src/App.tsx
 import { useState, useEffect } from 'react';
-import { fetchAccounts, fetchTransactions, sendChatMessage, confirmAction, verifyAction, fetchSubscriptions, fetchAuditLogs } from './api';
-import type { Account, Transaction, ChatMessage, SubscriptionCandidate, AuditEvent } from './api';
+import { fetchAccounts, fetchTransactions, sendChatMessage, confirmAction, verifyAction, fetchSubscriptions, fetchAuditLogs, fetchDemoInbox } from './api';
+import type { Account, Transaction, ChatMessage, SubscriptionCandidate, AuditEvent, DemoInboxMessage } from './api';
 
 export default function App() {
   // Banking data state
@@ -23,7 +23,7 @@ export default function App() {
   const [inputMessage, setInputMessage] = useState<string>('');
   const [sending, setSending] = useState<boolean>(false);
   const [actionStates, setActionStates] = useState<
-      Record<string, { status: string; message?: string; mfaCode?: string; error?: string }>
+      Record<string, { status: string; message?: string; mfaCode?: string; error?: string; inboxMessage?: string }>
     >({});
 
   async function loadData() {
@@ -94,6 +94,13 @@ export default function App() {
         setActionStates((prev) => ({
           ...prev,
           [actionId]: { status: 'PENDING_MFA', message: res.message, mfaCode: '' },
+        }));
+        // Simulated OTP delivery: show the code from the demo inbox
+        const inbox = await fetchDemoInbox().catch((): DemoInboxMessage[] => []);
+        const inboxMessage = inbox.find((m) => m.action_id === actionId)?.message;
+        setActionStates((prev) => ({
+          ...prev,
+          [actionId]: { ...prev[actionId], inboxMessage },
         }));
       } else if (res.status === 'COMPLETED') {
         setActionStates((prev) => ({
@@ -260,11 +267,15 @@ export default function App() {
                             {/* 2. MFA Input (Shown if Red tier) */}
                             {actionStates[act.arguments.action_id]?.status === 'PENDING_MFA' && (
                               <div style={{ background: '#fff3e0', padding: '6px', borderRadius: '4px' }}>
-                                <small style={{ color: '#e65100', fontWeight: 'bold' }}>🔒 Enter OTP code (123456):</small>
+                                <div style={{ background: '#fff', border: '1px dashed #e65100', padding: '6px', borderRadius: '4px', marginBottom: '6px' }}>
+                                  <small style={{ fontWeight: 'bold' }}>📨 Demo inbox (simulated, no SMS/email sent)</small>
+                                  <div><small>{actionStates[act.arguments.action_id]?.inboxMessage || 'No code yet. Check the backend console.'}</small></div>
+                                </div>
+                                <small style={{ color: '#e65100', fontWeight: 'bold' }}>🔒 Enter the OTP code from your demo inbox:</small>
                                 <div style={{ display: 'flex', gap: '4px', marginTop: '4px' }}>
                                   <input
                                     type="text"
-                                    placeholder="123456"
+                                    placeholder="6-digit code"
                                     value={actionStates[act.arguments.action_id]?.mfaCode || ''}
                                     onChange={(e) => {
                                       const val = e.target.value;
