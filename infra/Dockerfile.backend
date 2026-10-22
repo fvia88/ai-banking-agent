@@ -15,6 +15,7 @@ RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 # Copy backend application and shared team contracts
 COPY backend/ /app/backend/
 COPY contracts/ /app/contracts/
+COPY finance/ /app/finance/
 
 EXPOSE 8000
 
