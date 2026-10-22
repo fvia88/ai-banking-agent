@@ -1,17 +1,21 @@
 # backend/app/api/chat.py
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from contracts.models import ChatInput, ChatOutput, BankingContext
 from contracts.enums import ActionStatus, Direction, ToolName
 from app.api.deps import get_current_user
 from app.db.session import get_db
-from app.db.models import UserModel, AccountModel
-from app.services.adapters import agent_service, finance_service, subscriptions_service
+from app.db.models import UserModel, AccountModel, TransactionModel
+from app.services.adapters import agent_service, finance_service, subscriptions_service, build_tool_catalog
+from app.config import settings
 from app.services.actions import create_action_record
 from app.services.session_store import (
     get_conversation_state,
     set_conversation_state,
     clear_conversation_state,
+    conversation_key,
+    conversation_session,
 )
 from decimal import Decimal
 from contracts.models import Account, Transaction
@@ -24,8 +28,16 @@ def handle_chat(
     user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+  state_key = (conversation_key(user.user_id, chat_input.conversation_id)
+               if not agent_service.use_mock else chat_input.conversation_id)
+  # Keep the lock until all processing/result handling and state saves finish.
+  with conversation_session(state_key):
+    return _handle_chat_turn(chat_input, user, db, state_key)
+
+
+def _handle_chat_turn(chat_input: ChatInput, user: UserModel, db: Session, state_key: str):
   # 1. Draft Abandonment ("never mind" / "nevermind")
-  if chat_input.message.strip().lower() in ["never mind", "nevermind"]:
+  if agent_service.use_mock and chat_input.message.strip().lower() in ["never mind", "nevermind"]:
     clear_conversation_state(chat_input.conversation_id)
     return ChatOutput(
         conversation_id=chat_input.conversation_id,
@@ -35,7 +47,9 @@ def handle_chat(
     )
 
   # 2. Retrieve conversation memory
-  saved_state = get_conversation_state(chat_input.conversation_id)
+  real_agent = not agent_service.use_mock
+  # The route holds the session lock for this entire read/process/write cycle.
+  saved_state = get_conversation_state(state_key)
   clarification_req = saved_state.get("clarification_request")
 
   # 3. Fetch primary account
@@ -43,18 +57,34 @@ def handle_chat(
       db.query(AccountModel).filter(AccountModel.user_id == user.user_id).all()
   )
   primary_acc = user_accounts[0] if user_accounts else None
-  account_id = primary_acc.account_id if primary_acc else "acc_cny_001"
+  account_id = primary_acc.account_id if primary_acc else None
 
   # 4. Generate proposal with conversation context
-  result = agent_service.process(
-      chat_input,
-      account_id=account_id,
-      account_locked=user.is_locked,
-      clarification_request=clarification_req,
-  )
+  if real_agent:
+    # The current DB has no recipient/subscription tables. Keep P2's explicit
+    # synthetic demo records only for the configured demo user; never supply
+    # those records to other users or promote detector candidates to active.
+    demo_context = (build_tool_catalog()[0]["context"]
+                    if user.user_id == settings.DEFAULT_DEMO_USER_ID else {})
+    agent_context = dict(
+        account_id=account_id,
+        account_locked=user.is_locked,
+        recipients=[r for r in demo_context.get("recipients", []) if r["user_id"] == user.user_id],
+        subscriptions=[s for s in demo_context.get("subscriptions", []) if s["user_id"] == user.user_id],
+    )
+    turn = agent_service.process_turn(
+        chat_input, conversation_state=saved_state or None, **agent_context,
+    )
+    set_conversation_state(state_key, turn.state.model_dump(mode="json"))
+    result = turn.result
+  else:
+    result = agent_service.process(
+        chat_input, account_id=account_id, account_locked=user.is_locked,
+        clarification_request=clarification_req,
+    )
 
   # 5. Manage Conversation Memory
-  if result.needs_clarification:
+  if result.needs_clarification and not real_agent:
     # Save current message so next turn remembers it
     set_conversation_state(
         chat_input.conversation_id,
@@ -66,25 +96,27 @@ def handle_chat(
         actions=[],
         status=ActionStatus.COMPLETED,
     )
-  else:
+  elif not real_agent:
     # Action proposed or completed -> Clear clarification memory
     clear_conversation_state(chat_input.conversation_id)
 
   # 6. Check if the proposal is a Read Tool (Automatic Green Double-Hop)
-    READ_TOOLS = [
+  READ_TOOLS = [
         ToolName.GET_BALANCE.value,
         ToolName.ANALYZE_SPENDING.value,
         ToolName.LIST_SUBSCRIPTIONS.value,
-    ]
+  ]
 
-    if len(result.proposals) == 1 and result.proposals[0].tool.value in READ_TOOLS:
+  if len(result.proposals) == 1 and result.proposals[0].tool.value in READ_TOOLS:
         proposal = result.proposals[0]
         tool_name = proposal.tool.value
         tool_data = {}
 
         if tool_name == ToolName.GET_BALANCE.value:
             acc_id = proposal.arguments.get("account_id", account_id)
-            acc_record = db.query(AccountModel).filter(AccountModel.account_id == acc_id).first()
+            acc_record = db.query(AccountModel).filter(
+                AccountModel.account_id == acc_id, AccountModel.user_id == user.user_id,
+            ).first()
             if acc_record:
                 tool_data = Account(
                     account_id=acc_record.account_id,
@@ -147,13 +179,18 @@ def handle_chat(
             "data": tool_data,
         }
 
-        final_result = agent_service.process(
-            chat_input,
-            account_id=account_id,
-            account_locked=user.is_locked,
-            pending_proposal_ids=[proposal.proposal_id],
-            tool_results=[tool_result],
-        )
+        if real_agent:
+            final_turn = agent_service.process_turn(
+                chat_input, conversation_state=get_conversation_state(state_key),
+                tool_results=[tool_result], **agent_context,
+            )
+            set_conversation_state(state_key, final_turn.state.model_dump(mode="json"))
+            final_result = final_turn.result
+        else:
+            final_result = agent_service.process(
+                chat_input, account_id=account_id, account_locked=user.is_locked,
+                pending_proposal_ids=[proposal.proposal_id], tool_results=[tool_result],
+            )
 
         return ChatOutput(
             conversation_id=chat_input.conversation_id,
@@ -162,54 +199,54 @@ def handle_chat(
             status=ActionStatus.COMPLETED,
         )
 
-    # 7. Otherwise: Mutation Action Proposals (Transfers & Cancellations)
-    has_pending_actions = False
-    if result.proposals:
-        balance_str = f"{primary_acc.balance:.2f}" if primary_acc else "0.00"
-        daily_total_str = f"{primary_acc.daily_transfer_total:.2f}" if primary_acc else "0.00"
+  # 7. Otherwise: Mutation Action Proposals (Transfers & Cancellations)
+  has_pending_actions = False
+  if result.proposals:
+      balance_str = f"{primary_acc.balance:.2f}" if primary_acc else "0.00"
+      daily_total_str = f"{primary_acc.daily_transfer_total:.2f}" if primary_acc else "0.00"
 
-        context = BankingContext(
-            user_id=user.user_id,
-            account_id=account_id,
-            daily_transfer_total=daily_total_str,
-            account_balance=balance_str,
-            account_locked=user.is_locked,
-        )
+      context = BankingContext(
+          user_id=user.user_id,
+          account_id=account_id,
+          daily_transfer_total=daily_total_str,
+          account_balance=balance_str,
+          account_locked=user.is_locked,
+      )
 
-        for proposal in result.proposals:
-            try:
-                action_record, digest, tier = create_action_record(
-                    user_id=user.user_id,
-                    proposal=proposal,
-                    source_account_id=account_id,
-                    context=context,
-                )
+      for proposal in result.proposals:
+          try:
+              action_record, digest, tier = create_action_record(
+                  user_id=user.user_id,
+                  proposal=proposal,
+                  source_account_id=account_id,
+                  context=context,
+              )
 
-                if tier in ["YELLOW", "RED"]:
-                    db.add(action_record)
-                    proposal.arguments["action_id"] = action_record.action_id
-                    proposal.arguments["action_digest"] = digest
-                    proposal.arguments["tier"] = tier
-                    has_pending_actions = True
-                else:
-                    proposal.arguments["tier"] = "GREEN"
+              if tier in ["YELLOW", "RED"]:
+                  db.add(action_record)
+                  proposal.arguments["action_id"] = action_record.action_id
+                  proposal.arguments["action_digest"] = digest
+                  proposal.arguments["tier"] = tier
+                  has_pending_actions = True
+              else:
+                  proposal.arguments["tier"] = "GREEN"
 
-            except ValueError as e:
-                return ChatOutput(
-                    conversation_id=chat_input.conversation_id,
-                    reply="Action blocked: Your account is currently locked for state-changing operations.",
-                    actions=[],
-                    status=ActionStatus.REJECTED,
-                )
+          except ValueError as e:
+              return ChatOutput(
+                  conversation_id=chat_input.conversation_id,
+                  reply="Action blocked: Your account is currently locked for state-changing operations.",
+                  actions=[],
+                  status=ActionStatus.REJECTED,
+              )
 
-        db.commit()
-        status = ActionStatus.PENDING_CONFIRMATION if has_pending_actions else ActionStatus.COMPLETED
-    else:
-        status = ActionStatus.COMPLETED
+      db.commit()
+      status = ActionStatus.PENDING_CONFIRMATION if has_pending_actions else ActionStatus.COMPLETED
+  else:
+      status = ActionStatus.COMPLETED
 
-    return ChatOutput(
-        conversation_id=chat_input.conversation_id,
-        reply=result.reply,
-        actions=result.proposals,
-        status=status,
-    )
+  return ChatOutput(
+      conversation_id=chat_input.conversation_id,
+      reply=result.reply,
+      actions=result.proposals,
+      status=status,
+  )
