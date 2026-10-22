@@ -285,6 +285,27 @@ def test_unsupported_cancellation_and_compound():
     assert run("Cancel StreamBox then transfer 39 to Bob").needs_clarification
 
 
+def test_unmatched_cancellation_shows_choices_and_retains_draft():
+    catalog = demo_catalog()
+    first = service.process_turn(ChatInput(conversation_id="test", message="Cancel my subscription"), catalog)
+    assert first.result.needs_clarification
+    assert "StreamBox" in first.result.reply
+    for entry in catalog:
+        entry["context"]["conversation_state"] = first.state.model_dump(mode="json")
+    second = service.process_turn(ChatInput(conversation_id="test", message="netflix"), catalog)
+    assert "couldn't find a matching subscription in your verified list" in second.result.reply
+    assert "StreamBox" in second.result.reply
+    assert "CloudMusic" not in second.result.reply
+    assert second.result.needs_clarification
+    assert not second.result.proposals
+    assert second.state.pending_cancellation is not None
+    for entry in catalog:
+        entry["context"]["conversation_state"] = second.state.model_dump(mode="json")
+    final = service.process_turn(ChatInput(conversation_id="test", message="StreamBox"), catalog)
+    assert len(final.result.proposals) == 1
+    assert final.result.proposals[0].arguments == {"subscription_id": "sub_streambox"}
+
+
 def test_untrusted_result_and_pending_execution():
     catalog = demo_catalog()
     envelope = dict(conversation_id="test", proposal_id="p1", tool="request_transfer",

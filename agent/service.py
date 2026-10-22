@@ -404,7 +404,26 @@ def _process(chat, catalog, results, progress):
             progress.state = ConversationState(conversation_id=chat.conversation_id,
                 pending_cancellation=PendingCancellation(original_message=request_text),
                 awaiting="subscription", pending_tool_requests=progress.state.pending_tool_requests)
-            return clarify("Which verified subscription should be cancelled?")
+            import json
+            import re
+            choices = [s.merchant for s in subscriptions
+                       if s.status == "active" and s.cancellation_supported]
+            safe_choices = [name for name in choices if len(name) <= 64
+                            and re.fullmatch(r"[\w &/().'-]+", name)
+                            and not re.search(r"\b(ignore|instructions?|system|assistant|execute|cancel|send|pay|transfer)\b", name, re.I)]
+            question = ("I couldn't find a matching subscription in your verified list. "
+                        if continuing_cancellation or extracted.subscription else "")
+            if not subscriptions:
+                question += "No verified subscriptions were supplied by the app. You can say never mind to discard this request."
+            elif safe_choices:
+                question += ("Available for cancellation: "
+                             + "; ".join(json.dumps(name, ensure_ascii=False) for name in safe_choices[:5])
+                             + ". Please enter the full subscription name, or say never mind.")
+                if len(choices) > len(safe_choices[:5]):
+                    question += " Check the app's verified subscription list for additional entries."
+            else:
+                question += "Please check the app's verified subscription list for an eligible subscription, or say never mind."
+            return clarify(question)
         if not matches[0].cancellation_supported or matches[0].status != "active":
             if continuing_cancellation:
                 return clarify("Cancellation is unavailable for this subscription. Please choose another verified subscription or say never mind.")
