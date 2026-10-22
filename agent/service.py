@@ -8,7 +8,7 @@ from contracts.models import (ChatInput, AgentResult, ActionProposal, Account,
                               Recipient, Subscription, SubscriptionReport, SpendingReport, ExecutionResult, PositiveMoney)
 from contracts.tool_schemas import validate_tool_arguments
 from .provider import Intent, ProviderError, get_provider
-from .request_guard import is_direct_request, stated_word_amounts
+from .request_guard import is_direct_request, stated_word_amounts, is_new_banking_request
 from .conversation import (ConversationState, PendingTransfer, PendingSpending,
                            PendingCancellation, ConversationTurn, PendingToolRequest)
 
@@ -259,6 +259,15 @@ def _process(chat, catalog, results, progress):
     context = catalog[0].get("context", {}) if catalog else {}
     message = chat.message
     previous = context.get("clarification_request")
+    if progress.state.awaiting is not None and is_new_banking_request(message):
+        # Replace only the unfinished draft. Already-issued proposals retain
+        # their canonical snapshots and still require backend approval.
+        # On an exception process_turn returns the original supplied state.
+        if previous:
+            raise ValueError("Do not mix structured state with legacy replay")
+        progress.state = ConversationState(
+            conversation_id=chat.conversation_id,
+            pending_tool_requests=progress.state.pending_tool_requests)
     pending = progress.state.pending_transfer
     spending = progress.state.pending_spending
     cancellation = progress.state.pending_cancellation
