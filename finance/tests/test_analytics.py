@@ -27,6 +27,7 @@ def test_t12_matches_expected_cases(shared, t12):
     r = analyze_spending(shared, t12["period"])
     assert r.total_spending == D(t12["expected_total_spending"])
     assert r.category_totals == {k: D(v) for k, v in t12["expected_category_totals"].items()}
+    assert r.anomalies == []
 
 
 def test_t12_credit_inflows_excluded(shared):
