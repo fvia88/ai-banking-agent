@@ -23,6 +23,75 @@ def retain_proposal(catalog, proposal):
         entry["context"]["conversation_state"] = state.model_dump(mode="json")
 
 
+@pytest.mark.parametrize("failure,stage,category,http", [
+    (ProviderError("SECRET_PROVIDER_BODY", category="network_connection_error"),
+     "provider_request", "network_connection_error", "None"),
+    (ProviderError("SECRET_PROVIDER_BODY", category="provider_unavailable", http_code=503),
+     "provider_request", "provider_unavailable", "503"),
+    (ProviderError("SECRET_PROVIDER_BODY", category="SECRET_CATEGORY"),
+     "provider_request", "provider_error", "None"),
+])
+def test_safe_provider_failure_logs(monkeypatch, caplog, failure, stage, category, http):
+    class Broken:
+        def extract(self, message):
+            raise failure
+    monkeypatch.setattr(service, "get_provider", lambda: Broken())
+    result = run("PRIVATE_MESSAGE 123.45")
+    assert not result.proposals
+    assert "No new action was proposed." in result.reply
+    if category == "network_connection_error":
+        assert "connection was interrupted" in result.reply
+    elif category == "provider_unavailable":
+        assert "temporarily unavailable" in result.reply
+    else:
+        assert "AI service request failed" in result.reply
+    assert f"stage={stage} category={category} http_code={http}" in caplog.text
+    assert "event_id=" in caplog.text
+    for secret in ("SECRET_PROVIDER_BODY", "SECRET_CATEGORY", "PRIVATE_MESSAGE", "123.45", "account_001"):
+        assert secret not in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
+
+
+def test_invalid_provider_output_logs_only_stage(monkeypatch, caplog):
+    class Broken:
+        def extract(self, message):
+            return '{"intent":"SECRET_INVALID_INTENT"}'
+    monkeypatch.setattr(service, "get_provider", lambda: Broken())
+    result = run("PRIVATE_MESSAGE")
+    assert not result.proposals
+    assert "stage=intent_validation category=validation_error" in caplog.text
+    assert "response that did not pass validation" in result.reply
+    assert "SECRET_INVALID_INTENT" not in caplog.text
+    assert "PRIVATE_MESSAGE" not in caplog.text
+
+
+@pytest.mark.parametrize("category,expected", [
+    ("network_timeout", "timed out"),
+    ("quota_or_rate_limit", "usage limit"),
+    ("missing_key", "configuration needs attention"),
+    ("authentication", "configuration needs attention"),
+    ("empty_response", "empty response"),
+])
+def test_provider_failure_replies_are_distinct(monkeypatch, category, expected):
+    class Broken:
+        def extract(self, message):
+            raise ProviderError("PRIVATE_ERROR", category=category)
+    monkeypatch.setattr(service, "get_provider", lambda: Broken())
+    result = run("What is my balance?")
+    assert expected in result.reply
+    assert "PRIVATE_ERROR" not in result.reply
+    assert not result.proposals
+
+
+def test_invalid_catalog_logs_separate_stage(caplog):
+    catalog = demo_catalog()
+    catalog.append(catalog[0])
+    result = run("PRIVATE_MESSAGE", catalog)
+    assert not result.proposals
+    assert "stage=catalog_validation category=processing_error" in caplog.text
+    assert "PRIVATE_MESSAGE" not in caplog.text
+
+
 @pytest.mark.parametrize("message,tool", [
     ("What is my balance?", "get_balance"),
     ("Analyze spending 2026-10", "analyze_spending"),
