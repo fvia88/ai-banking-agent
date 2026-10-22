@@ -1,9 +1,16 @@
 # backend/tests/test_mfa.py
 """P3: OTP/MFA challenge lifecycle tests, run through the HTTP endpoints with P2's real executor."""
+import json
+import threading
 from datetime import timedelta
 from decimal import Decimal
-from contracts.enums import ActionStatus, ToolName
+from fastapi import HTTPException
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from contracts.enums import ActionStatus, Tier, ToolName
+from app.api import approvals
 from app.db.models import AccountModel, ActionApprovalModel, TransactionModel, UserModel
+from app.db.session import Base
 from app.services import mfa
 
 ALICE = {"X-Demo-User-Id": "usr_demo_01"}
@@ -203,3 +210,81 @@ def test_executor_failure_consumes_challenge_without_retry_debit(client, db_sess
     db_session.commit()
     assert _verify(client, action_id).status_code == 400
     assert _balance(db_session) == START_BALANCE
+
+
+
+
+def test_truly_concurrent_verifies_debit_once(tmp_path, monkeypatch):
+    """
+    Two threads, each with its own DB session on a shared file-based SQLite DB,
+    both pass the code check before either claims the challenge (forced with a
+    barrier). Only the atomic claim stands between them and a double debit.
+    """
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'race.db'}",
+        connect_args={"check_same_thread": False, "timeout": 10},
+    )
+    Base.metadata.create_all(bind=engine)
+    SessionFactory = sessionmaker(bind=engine)
+
+    setup = SessionFactory()
+    setup.add(UserModel(user_id="usr_demo_01", username="Alice Wang", is_locked=False))
+    setup.add(AccountModel(
+        account_id="acc_cny_001", user_id="usr_demo_01", account_number="6222021001009988",
+        currency="CNY", balance=START_BALANCE, daily_transfer_total=Decimal("800.00"),
+    ))
+    now = mfa.utc_now()
+    record = ActionApprovalModel(
+        action_id="act_race", user_id="usr_demo_01", tool=ToolName.REQUEST_TRANSFER.value,
+        tier=Tier.RED.value, action_digest="0" * 64, expires_at=now + timedelta(minutes=10),
+        payload_json=json.dumps({"source_account_id": "acc_cny_001", "recipient_id": "rcp_bob", "amount": "500.00"}),
+    )
+    mfa.issue_challenge(record, now)
+    setup.add(record)
+    setup.commit()
+    setup.close()
+
+    barrier = threading.Barrier(2, timeout=5)
+    original_check = mfa.check_challenge
+
+    def check_then_wait(*args, **kwargs):
+        result = original_check(*args, **kwargs)
+        barrier.wait()  # both threads have passed the check before either claims
+        return result
+
+    monkeypatch.setattr(mfa, "check_challenge", check_then_wait)
+
+    outcomes = []
+
+    def verify_in_thread():
+        session = SessionFactory()
+        try:
+            user = session.query(UserModel).filter(UserModel.user_id == "usr_demo_01").first()
+            result = approvals.verify_action(
+                "act_race", approvals.VerifyActionRequest(verification_code=mfa.SIMULATED_OTP_CODE),
+                user=user, db=session,
+            )
+            outcomes.append(("ok", result.status))
+        except HTTPException as exc:
+            outcomes.append(("http", exc.status_code))
+        except Exception as exc:  # surface DB lock errors etc. as test failures
+            outcomes.append(("error", repr(exc)))
+        finally:
+            session.close()
+
+    threads = [threading.Thread(target=verify_in_thread) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=15)
+
+    assert sorted(outcomes) == [("http", 409), ("ok", ActionStatus.COMPLETED)], outcomes
+
+    check = SessionFactory()
+    acc = check.query(AccountModel).filter(AccountModel.account_id == "acc_cny_001").first()
+    assert acc.balance == START_BALANCE - Decimal("500.00")
+    assert check.query(TransactionModel).filter(TransactionModel.category == "Transfers").count() == 1
+    assert check.query(ActionApprovalModel).filter(ActionApprovalModel.action_id == "act_race").first().status \
+        == ActionStatus.COMPLETED.value
+    check.close()
+    engine.dispose()
