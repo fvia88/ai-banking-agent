@@ -5,7 +5,8 @@ from contracts.models import ChatInput, ChatOutput, BankingContext
 from contracts.enums import ActionStatus, Direction, ToolName
 from app.api.deps import get_current_user
 from app.db.session import get_db
-from app.db.models import UserModel, AccountModel
+from app.db.models import UserModel, AccountModel, TransactionModel
+from datetime import datetime
 from app.services.adapters import agent_service, finance_service, subscriptions_service
 from app.services.actions import create_action_record
 from app.services.session_store import (
@@ -152,6 +153,11 @@ def handle_chat(
             account_id=account_id,
             account_locked=user.is_locked,
             pending_proposal_ids=[proposal.proposal_id],
+            # P1's real agent only accepts a result for a proposal it issued
+            conversation_state={
+                "conversation_id": chat_input.conversation_id,
+                "pending_tool_requests": [{"proposal": proposal.model_dump(mode="json")}],
+            },
             tool_results=[tool_result],
         )
 

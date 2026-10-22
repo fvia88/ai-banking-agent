@@ -169,7 +169,7 @@ class SubscriptionsAdapterService:
         # return detect_subscriptions(transactions)
         return MockSubscriptionsAdapter.detect_subscriptions(transactions)
 
-agent_service = AgentAdapterService(use_mock=True)
+agent_service = AgentAdapterService()  # USE_MOCK_AGENT env selects mock (default) or P1's real agent
 policy_service = SecurityAdapterService(use_mock=True)
 finance_service = FinanceAdapterService(use_mock=True)
 subscriptions_service = SubscriptionsAdapterService(use_mock=True)
