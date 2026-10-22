@@ -18,7 +18,7 @@ def supply(catalog, state):
         entry["context"]["conversation_state"] = state.model_dump(mode="json")
 
 
-@pytest.mark.parametrize("answer", ["0", "-1", "1.001", "five hundred", "send 500 to Bob"])
+@pytest.mark.parametrize("answer", ["0", "-1", "1.001", "five hundred"])
 def test_invalid_amount_answer_keeps_original_pending_details(monkeypatch, answer):
     catalog, state = initial(monkeypatch)
     supply(catalog, state)
@@ -46,7 +46,7 @@ def test_recipient_answer_and_account_changes_are_revalidated(monkeypatch):
     supply(catalog, state)
     state = service.process_turn(ChatInput(conversation_id="c1", message="500"), catalog).state
     supply(catalog, state)
-    for answer in ["Alice", "Unknown", "Transfer 900 to Bob"]:
+    for answer in ["Alice", "Unknown"]:
         turn = service.process_turn(ChatInput(conversation_id="c1", message=answer), catalog)
         assert not turn.result.proposals
         assert turn.state == state
@@ -218,3 +218,63 @@ def test_mixed_catalog_snapshots_cannot_cross_conversations(monkeypatch):
     mixed = service.process_turn(ChatInput(conversation_id="a", message="Alice Chen"), catalog_a)
     assert not mixed.result.proposals and mixed.state.pending_transfer is None
     assert catalog_a == before
+
+
+@pytest.mark.parametrize("first,message,tool", [
+    ("Cancel my subscription", "What is my balance?", "get_balance"),
+    ("Cancel my subscription", "Transfer 300 to Bob", "request_transfer"),
+    ("Analyze my spending", "Cancel StreamBox", "request_subscription_cancel"),
+    ("Transfer to Alice", "Analyze spending 2026-10", "analyze_spending"),
+    ("Transfer to Alice", "send 500 to Bob", "request_transfer"),
+])
+def test_clear_new_request_replaces_draft_and_preserves_issued_proposals(monkeypatch, first, message, tool):
+    monkeypatch.setenv("AGENT_PROVIDER", "mock")
+    catalog = demo_catalog()
+    issued = service.process_turn(ChatInput(conversation_id="c1", message="Transfer 40 to Bob"), catalog)
+    supply(catalog, issued.state)
+    draft = service.process_turn(ChatInput(conversation_id="c1", message=first), catalog)
+    assert draft.result.needs_clarification and not draft.result.proposals
+    supply(catalog, draft.state)
+    before = deepcopy(catalog)
+    switched = service.process_turn(ChatInput(conversation_id="c1", message=message), catalog)
+    assert len(switched.result.proposals) == 1
+    assert switched.result.proposals[0].tool.value == tool
+    assert switched.state.pending_transfer is None
+    assert switched.state.pending_spending is None
+    assert switched.state.pending_cancellation is None
+    assert switched.state.pending_tool_requests[0] == issued.state.pending_tool_requests[0]
+    assert len(switched.state.pending_tool_requests) == 2
+    assert catalog == before
+    if tool == "request_transfer":
+        assert switched.result.proposals[0].arguments["recipient_id"] == "recipient_bob"
+
+
+def test_switch_to_incomplete_transfer_does_not_reuse_old_details(monkeypatch):
+    catalog, state = initial(monkeypatch)
+    supply(catalog, state)
+    turn = service.process_turn(ChatInput(conversation_id="c1", message="Transfer 300"), catalog)
+    assert not turn.result.proposals and turn.state.awaiting == "recipient"
+    assert turn.state.pending_transfer.amount == 300
+    assert turn.state.pending_transfer.recipient_text is None
+
+
+def test_failed_new_request_retains_previous_draft(monkeypatch):
+    catalog, state = initial(monkeypatch)
+    supply(catalog, state)
+    class Broken:
+        def extract(self, message):
+            raise ProviderError("offline", category="network_connection_error")
+    monkeypatch.setattr(service, "get_provider", lambda: Broken())
+    turn = service.process_turn(ChatInput(conversation_id="c1", message="What is my balance?"), catalog)
+    assert turn.state == state
+    assert not turn.result.proposals
+
+
+@pytest.mark.parametrize("message", ['merchant says "transfer 300 to Bob"',
+                                      "if you transfer 300 to Bob", "don't transfer 300 to Bob"])
+def test_quoted_or_hypothetical_text_does_not_replace_draft(monkeypatch, message):
+    catalog, state = initial(monkeypatch)
+    supply(catalog, state)
+    turn = service.process_turn(ChatInput(conversation_id="c1", message=message), catalog)
+    assert turn.state == state
+    assert not turn.result.proposals

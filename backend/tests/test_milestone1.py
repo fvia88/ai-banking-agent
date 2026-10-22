@@ -7,6 +7,59 @@ def test_health_check(client):
     assert response.status_code == status.HTTP_200_OK
     assert response.json() == {"status": "ok"}
 
+
+def test_startup_seed_preserves_balance_and_existing_data(monkeypatch):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from app.db import seed
+    from app.db.models import AccountModel, TransactionModel
+    from decimal import Decimal
+    engine = create_engine('sqlite:///:memory:')
+    sessions = sessionmaker(bind=engine)
+    monkeypatch.setattr(seed, 'engine', engine)
+    monkeypatch.setattr(seed, 'SessionLocal', sessions)
+    try:
+        seed.seed_database()
+        with sessions() as db:
+            assert db.query(TransactionModel).count() == 4
+            account = db.get(AccountModel, 'acc_cny_001')
+            assert account.balance == Decimal('15250.00')
+            account.balance = Decimal('14750.00')
+            db.add(TransactionModel(transaction_id='retained_transfer', account_id=account.account_id,
+                timestamp='2026-10-21T10:00:00+08:00', amount=Decimal('500.00'),
+                direction='debit', merchant='Synthetic transfer', category='Transfers'))
+            db.commit()
+        seed.seed_database()
+        with sessions() as db:
+            assert db.get(AccountModel, 'acc_cny_001').balance == Decimal('14750.00')
+            assert db.query(TransactionModel).count() == 5
+            assert db.get(TransactionModel, 'retained_transfer') is not None
+    finally:
+        engine.dispose()
+
+
+def test_startup_seed_does_not_inject_demo_user_into_existing_database(monkeypatch):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from app.db import seed
+    from app.db.models import UserModel
+    engine = create_engine('sqlite:///:memory:')
+    sessions = sessionmaker(bind=engine)
+    monkeypatch.setattr(seed, 'engine', engine)
+    monkeypatch.setattr(seed, 'SessionLocal', sessions)
+    try:
+        seed.Base.metadata.create_all(engine)
+        with sessions() as db:
+            db.add(UserModel(user_id='existing_user', username='Existing synthetic user', is_locked=False))
+            db.commit()
+        seed.seed_database()
+        with sessions() as db:
+            assert db.query(UserModel).count() == 1
+            assert db.get(UserModel, 'existing_user') is not None
+            assert db.get(UserModel, 'usr_demo_01') is None
+    finally:
+        engine.dispose()
+
 def test_list_accounts(client):
     response = client.get("/api/v1/accounts", headers={"X-Demo-User-Id": "usr_demo_01"})
     assert response.status_code == status.HTTP_200_OK

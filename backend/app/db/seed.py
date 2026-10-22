@@ -15,11 +15,24 @@ def load_fixture(filename: str):
     return []
 
 def seed_database():
-    Base.metadata.drop_all(bind=engine)
+    """Initialize an empty demo DB without resetting existing user data."""
     Base.metadata.create_all(bind=engine)
     
     db = SessionLocal()
     try:
+        if db.query(UserModel.user_id).first() is not None:
+            print("Database already contains users; existing data preserved.")
+            return
+        # Create standard demo user
+        demo_user = UserModel(
+            user_id="usr_demo_01",
+            username="Alice Wang",
+            is_locked=False
+        )
+        db.add(demo_user)
+        
+        # Primary checking account (CNY 15,250.00 balance)
+        checking = AccountModel(
         # --- 1. Seed Users from fixtures/users.json ---
         users_data = load_fixture("users.json")
         for u in users_data:
@@ -111,6 +124,10 @@ def seed_database():
         db.add_all(demo_txs)
 
         db.commit()
+        print("Database successfully seeded with demo user 'usr_demo_01' and fixture transactions.")
+    except Exception:
+        db.rollback()
+        raise
         print("Database successfully seeded from fixtures/ (user_001 / account_001) and demo profile.")
     finally:
         db.close()
