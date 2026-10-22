@@ -1,3 +1,5 @@
+# hello from claine
+# hello 2
 # backend/app/services/adapters.py
 import os
 from contracts.models import ChatInput, AgentResult, ActionProposal, BankingContext, PolicyDecision, Transaction, SpendingReport, SubscriptionReport
