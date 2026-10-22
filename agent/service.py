@@ -2,19 +2,23 @@
 from decimal import Decimal, InvalidOperation
 from dataclasses import dataclass
 from uuid import uuid4
+import logging
 from pydantic import ValidationError, TypeAdapter
 from contracts.models import (ChatInput, AgentResult, ActionProposal, Account,
                               Recipient, Subscription, SubscriptionReport, SpendingReport, ExecutionResult, PositiveMoney)
 from contracts.tool_schemas import validate_tool_arguments
 from .provider import Intent, ProviderError, get_provider
-from .request_guard import is_direct_request, stated_word_amounts
+from .request_guard import is_direct_request, stated_word_amounts, is_new_banking_request
 from .conversation import (ConversationState, PendingTransfer, PendingSpending,
                            PendingCancellation, ConversationTurn, PendingToolRequest)
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
 class _Progress:
     state: ConversationState
+    stage: str = "input_state_validation"
 
 
 def _transfer_question(progress, draft, field, reply):
@@ -114,6 +118,7 @@ def process_turn(chat: ChatInput, tool_catalog: list[dict],
     No state is stored in this module or inferred from English reply templates.
     """
     original = ConversationState(conversation_id=chat.conversation_id)
+    progress = _Progress(original)
     try:
         chat = ChatInput.model_validate(chat)
         snapshots = [entry.get("context", {}).get("conversation_state") for entry in tool_catalog]
@@ -136,26 +141,68 @@ def process_turn(chat: ChatInput, tool_catalog: list[dict],
                                     state=ConversationState(conversation_id=chat.conversation_id,
                                         pending_tool_requests=original.pending_tool_requests))
         progress = _Progress(original)
+        progress.stage = "request_processing"
         result = _process(chat, tool_catalog, tool_results or [], progress)
+        progress.stage = "output_validation"
         if result.proposals:
             progress.state = ConversationState(conversation_id=chat.conversation_id,
                 pending_tool_requests=(*progress.state.pending_tool_requests,
                     *(PendingToolRequest(proposal=p.model_copy(deep=True)) for p in result.proposals)))
         return ConversationTurn(result=result, state=progress.state)
     except (ProviderError, ValidationError, ValueError, TypeError, KeyError,
-            AttributeError, InvalidOperation):
+            AttributeError, InvalidOperation) as exc:
+        # Never log exception text, tracebacks, validation inputs, identifiers,
+        # provider payloads, or banking data. The random event ID identifies only
+        # this failure; it is not derived from the user or conversation.
+        category = "processing_error"
+        http_code = None
+        if isinstance(exc, ProviderError):
+            allowed = {"provider_error", "missing_key", "invalid_request", "authentication",
+                       "access_denied", "model_not_found", "quota_or_rate_limit",
+                       "provider_server_error", "gateway_error", "provider_unavailable",
+                       "gateway_timeout", "sdk_or_network_error", "network_timeout",
+                       "proxy_error", "network_protocol_error", "network_connection_error",
+                       "unsupported_location", "empty_response"}
+            category = exc.category if exc.category in allowed else "provider_error"
+            http_code = exc.http_code if type(exc.http_code) is int else None
+        elif isinstance(exc, ValidationError):
+            category = "validation_error"
+        logger.warning("agent_failure event_id=%s stage=%s category=%s http_code=%s",
+                       uuid4().hex, progress.stage, category, http_code)
+        reply = "I could not safely process this request because of an internal processing or validation error. Please retry."
+        if isinstance(exc, ProviderError):
+            if category in {"network_connection_error", "network_protocol_error", "proxy_error"}:
+                reply = "I could not connect to the AI service or the connection was interrupted. Please check your connection and retry."
+            elif category == "network_timeout":
+                reply = "The AI service request timed out. Please retry."
+            elif category in {"provider_unavailable", "provider_server_error", "gateway_error", "gateway_timeout"}:
+                reply = "The AI service is temporarily unavailable. Please retry shortly."
+            elif category == "quota_or_rate_limit":
+                reply = "The AI service usage limit has been reached. Please try again later."
+            elif category in {"missing_key", "authentication", "access_denied", "unsupported_location", "model_not_found", "invalid_request"}:
+                reply = "The AI service rejected access or its configuration needs attention. Please contact the app team."
+            elif category == "empty_response":
+                reply = "The AI service returned an empty response. Please retry."
+            else:
+                reply = "The AI service request failed. Please retry; the app team can check the diagnostic logs."
+        elif progress.stage == "intent_validation":
+            reply = "The AI service returned a response that did not pass validation. Please retry or rephrase your request."
+        elif progress.stage == "tool_result_validation":
+            reply = "I could not verify the backend result, so I cannot confirm its outcome. Please contact the app team."
         return ConversationTurn(
-            result=AgentResult(reply="I could not safely process this request. No action was executed. Please retry."),
+            result=AgentResult(reply=reply + " No new action was proposed."),
             state=original,
         )
 
 
 def _process(chat, catalog, results, progress):
+    progress.stage = "catalog_validation"
     entries = {e["name"]: e for e in catalog}
     if len(entries) != len(catalog):
         raise ValueError("Duplicate tools")
     # Only a backend-correlated result for this conversation may ground a reply.
     if results:
+        progress.stage = "tool_result_validation"
         if len(results) != 1:
             raise ValueError("One result per continuation")
         result = results[0]
@@ -208,9 +255,19 @@ def _process(chat, catalog, results, progress):
         return AgentResult(reply=f"Backend action status: {execution.status.value}. Completion is not confirmed.")
 
     # Context is supplied by the backend, never inferred from fixture/global state.
+    progress.stage = "clarification_processing"
     context = catalog[0].get("context", {}) if catalog else {}
     message = chat.message
     previous = context.get("clarification_request")
+    if progress.state.awaiting is not None and is_new_banking_request(message):
+        # Replace only the unfinished draft. Already-issued proposals retain
+        # their canonical snapshots and still require backend approval.
+        # On an exception process_turn returns the original supplied state.
+        if previous:
+            raise ValueError("Do not mix structured state with legacy replay")
+        progress.state = ConversationState(
+            conversation_id=chat.conversation_id,
+            pending_tool_requests=progress.state.pending_tool_requests)
     pending = progress.state.pending_transfer
     spending = progress.state.pending_spending
     cancellation = progress.state.pending_cancellation
@@ -272,7 +329,11 @@ def _process(chat, catalog, results, progress):
             elif re.fullmatch(r"[+-]?\d+(?:\.\d+)?", chat.message.strip()):
                 message = re.sub(r"^(transfer|send)\b", r"\1 " + chat.message, previous, flags=re.I)
     if not continuing and not continuing_spending and not continuing_cancellation:
-        extracted = Intent.model_validate_json(get_provider().extract(message))
+        progress.stage = "provider_request"
+        payload = get_provider().extract(message)
+        progress.stage = "intent_validation"
+        extracted = Intent.model_validate_json(payload)
+    progress.stage = "proposal_validation"
     mapping = {"balance": "get_balance", "spending": "analyze_spending",
                "subscriptions": "list_subscriptions", "transfer": "request_transfer",
                "cancel": "request_subscription_cancel"}
@@ -285,7 +346,7 @@ def _process(chat, catalog, results, progress):
     if extracted.intent == "cancel" and not is_direct_request(request_text, "cancel"):
         return clarify("Please explicitly request cancellation of a verified subscription.")
     if not tool:
-        return clarify("Please request one balance, spending, subscription, transfer, or cancellation step at a time.")
+        return clarify("I'm not sure what you mean. I can help with balances, spending, subscriptions, transfers, or cancellations. Please ask for one step at a time.")
     if tool not in entries:
         return AgentResult(reply="That tool is unavailable. No action was executed.")
     context = entries[tool].get("context", {})
@@ -352,7 +413,26 @@ def _process(chat, catalog, results, progress):
             progress.state = ConversationState(conversation_id=chat.conversation_id,
                 pending_cancellation=PendingCancellation(original_message=request_text),
                 awaiting="subscription", pending_tool_requests=progress.state.pending_tool_requests)
-            return clarify("Which verified subscription should be cancelled?")
+            import json
+            import re
+            choices = [s.merchant for s in subscriptions
+                       if s.status == "active" and s.cancellation_supported]
+            safe_choices = [name for name in choices if len(name) <= 64
+                            and re.fullmatch(r"[\w &/().'-]+", name)
+                            and not re.search(r"\b(ignore|instructions?|system|assistant|execute|cancel|send|pay|transfer)\b", name, re.I)]
+            question = ("I couldn't find a matching subscription in your verified list. "
+                        if continuing_cancellation or extracted.subscription else "")
+            if not subscriptions:
+                question += "No verified subscriptions were supplied by the app. You can say never mind to discard this request."
+            elif safe_choices:
+                question += ("Available for cancellation: "
+                             + "; ".join(json.dumps(name, ensure_ascii=False) for name in safe_choices[:5])
+                             + ". Please enter the full subscription name, or say never mind.")
+                if len(choices) > len(safe_choices[:5]):
+                    question += " Check the app's verified subscription list for additional entries."
+            else:
+                question += "Please check the app's verified subscription list for an eligible subscription, or say never mind."
+            return clarify(question)
         if not matches[0].cancellation_supported or matches[0].status != "active":
             if continuing_cancellation:
                 return clarify("Cancellation is unavailable for this subscription. Please choose another verified subscription or say never mind.")
