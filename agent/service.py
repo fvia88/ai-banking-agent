@@ -12,6 +12,7 @@ from .request_guard import (is_direct_request, stated_word_amounts, is_new_banki
                             is_abandonment, is_generic_cancellation_request)
 from .conversation import (ConversationState, PendingTransfer, PendingSpending,
                            PendingCancellation, ConversationTurn, PendingToolRequest)
+from .planning import maybe_process_plan
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +140,9 @@ def process_turn(chat: ChatInput, tool_catalog: list[dict],
             if supplied.conversation_id != chat.conversation_id:
                 raise ValueError("Conversation state belongs to a different conversation")
             original = supplied
+        planned = maybe_process_plan(chat, tool_catalog, tool_results or [], original, process_turn)
+        if planned is not None:
+            return planned
         # A standalone abandonment command concerns the local unfinished draft,
         # not approval, execution, or subscription cancellation. Do not swallow
         # an execution result if this call is actually processing tool results.

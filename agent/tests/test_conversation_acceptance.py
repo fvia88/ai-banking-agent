@@ -77,6 +77,176 @@ def save_state(catalog, turn):
         entry['context']['conversation_state'] = turn.state.model_dump(mode='json')
 
 
+def plan_session(monkeypatch, message='Cancel StreamBox then transfer 39 CNY to Bob'):
+    monkeypatch.setenv('AGENT_PROVIDER', 'mock')
+    catalog = demo_catalog()
+    conversation_id = 'ordered_plan'
+    def send(message, results=None):
+        turn = process_turn(ChatInput(conversation_id=conversation_id, message=message), catalog, results)
+        save_state(catalog, turn)
+        return turn
+    first = send(message)
+    def outcome(proposal, status='COMPLETED', action_id='synthetic_action'):
+        return dict(conversation_id=conversation_id, proposal_id=proposal.proposal_id,
+                    tool=proposal.tool.value, arguments=proposal.arguments, status='success',
+                    data=dict(action_id=action_id, status=status, message='synthetic result', audit_id='audit_test'))
+    return catalog, send, outcome, first
+
+
+def test_bounded_plan_waits_for_cancellation_completion_before_transfer(monkeypatch):
+    catalog, send, outcome, first = plan_session(monkeypatch)
+    assert len(first.result.proposals) == 1
+    cancel = first.result.proposals[0]
+    assert cancel.tool.value == 'request_subscription_cancel'
+    assert first.state.pending_plan.steps[1].depends_on == ('cancel',)
+    assert first.state.pending_plan.steps[1].status == 'waiting'
+    assert 'does not add money' in first.result.reply
+    pending = send('okay', [outcome(cancel, 'PENDING_CONFIRMATION', 'cancel_action')])
+    assert not pending.result.proposals
+    assert pending.state.pending_plan.steps[1].status == 'waiting'
+    advanced = send('result', [outcome(cancel, 'COMPLETED', 'cancel_action')])
+    assert len(advanced.result.proposals) == 1
+    transfer = advanced.result.proposals[0]
+    assert transfer.tool.value == 'request_transfer'
+    assert transfer.arguments == dict(source_account_id='account_001', recipient_id='recipient_bob',
+                                      amount='39.00', currency='CNY')
+    assert advanced.state.pending_plan.steps[0].status == 'completed'
+    mfa = send('result', [outcome(transfer, 'PENDING_MFA', 'transfer_action')])
+    assert not mfa.result.proposals and mfa.state.pending_plan is not None
+    assert 'Completion is not confirmed' in mfa.result.reply
+    finished = send('result', [outcome(transfer, 'COMPLETED', 'transfer_action')])
+    assert not finished.result.proposals and finished.state.pending_plan is None
+    assert 'Plan completed' in finished.result.reply
+    replay = send('result', [outcome(cancel, 'COMPLETED', 'cancel_action')])
+    assert not replay.result.proposals and replay.state.pending_plan is None
+
+
+@pytest.mark.parametrize('status', ['REJECTED', 'FAILED', 'CANCELLED'])
+def test_plan_failure_stops_dependent_transfer(monkeypatch, status):
+    _, send, outcome, first = plan_session(monkeypatch)
+    stopped = send('result', [outcome(first.result.proposals[0], status)])
+    assert not stopped.result.proposals and stopped.state.pending_plan is None
+    assert not stopped.state.pending_tool_requests
+    assert 'Remaining plan steps stopped' in stopped.result.reply
+
+
+@pytest.mark.parametrize('command', ['okay', 'approved', 'done', 'cancellation completed',
+                                     'Cancel StreamBox then transfer 39 CNY to Bob'])
+def test_plan_user_text_cannot_release_dependency_or_duplicate_action(monkeypatch, command):
+    _, send, _, first = plan_session(monkeypatch)
+    turn = send(command)
+    assert not turn.result.proposals and turn.state == first.state
+
+
+@pytest.mark.parametrize('mutation', ['conversation', 'proposal', 'arguments', 'data', 'multiple'])
+def test_plan_untrusted_or_invalid_result_cannot_release_transfer(monkeypatch, mutation):
+    _, send, outcome, first = plan_session(monkeypatch)
+    envelope = deepcopy(outcome(first.result.proposals[0]))
+    if mutation == 'conversation':
+        envelope['conversation_id'] = 'different'
+    elif mutation == 'proposal':
+        envelope['proposal_id'] = 'different'
+    elif mutation == 'arguments':
+        envelope['arguments']['subscription_id'] = 'different'
+    elif mutation == 'data':
+        envelope['data']['status'] = 'invented'
+    turn = send('result', [envelope, envelope] if mutation == 'multiple' else [envelope])
+    assert not turn.result.proposals and turn.state == first.state
+
+
+def test_plan_pause_accepts_completion_but_waits_for_resume(monkeypatch):
+    _, send, outcome, first = plan_session(monkeypatch)
+    paused = send('human takeover')
+    assert paused.state.pending_plan.paused and not paused.result.proposals
+    completed = send('result', [outcome(first.result.proposals[0])])
+    assert not completed.result.proposals
+    assert completed.state.pending_plan.steps[0].status == 'completed'
+    assert completed.state.pending_plan.paused
+    resumed = send('resume plan')
+    assert len(resumed.result.proposals) == 1
+    assert resumed.result.proposals[0].tool.value == 'request_transfer'
+    again = send('resume plan')
+    assert not again.result.proposals and again.state == resumed.state
+
+
+def test_plan_stop_keeps_issued_action_but_prevents_transfer(monkeypatch):
+    _, send, outcome, first = plan_session(monkeypatch)
+    stopped = send('stop plan')
+    assert stopped.state.pending_plan is None
+    assert stopped.state.pending_tool_requests == first.state.pending_tool_requests
+    completed = send('result', [outcome(first.result.proposals[0])])
+    assert not completed.result.proposals and completed.state.pending_plan is None
+
+
+def test_plan_resolves_each_step_using_existing_clarification(monkeypatch):
+    _, send, outcome, first = plan_session(monkeypatch, 'Cancel my subscription then transfer 39 CNY to Alice')
+    assert not first.result.proposals and first.state.awaiting == 'subscription'
+    cancel = send('StreamBox')
+    assert cancel.result.proposals[0].tool.value == 'request_subscription_cancel'
+    transfer = send('result', [outcome(cancel.result.proposals[0])])
+    assert not transfer.result.proposals and transfer.state.awaiting == 'recipient'
+    assert transfer.state.pending_transfer.amount == 39
+    invalid = send('nobody')
+    assert not invalid.result.proposals and invalid.state.pending_plan is not None
+    selected = send('Alice Chen')
+    assert selected.result.proposals[0].arguments['recipient_id'] == 'recipient_alice'
+    assert selected.result.proposals[0].arguments['amount'] == '39.00'
+
+
+def test_plan_does_not_change_source_account_after_cancellation(monkeypatch):
+    catalog, send, outcome, first = plan_session(monkeypatch)
+    for entry in catalog:
+        entry['context']['account_ids'] = ['account_002']
+    turn = send('result', [outcome(first.result.proposals[0])])
+    assert not turn.result.proposals and turn.state.pending_plan.paused
+    assert turn.state.pending_plan.steps[0].status == 'completed'
+
+
+def test_plan_provider_failure_preserves_completed_cancellation_for_retry(monkeypatch):
+    from agent.provider import ProviderError, get_provider
+    _, send, outcome, first = plan_session(monkeypatch)
+    class Unavailable:
+        def extract(self, text):
+            raise ProviderError('unavailable', category='network_timeout')
+    monkeypatch.setattr(service, 'get_provider', lambda: Unavailable())
+    paused = send('result', [outcome(first.result.proposals[0])])
+    assert not paused.result.proposals and paused.state.pending_plan.paused
+    assert paused.state.pending_plan.steps[0].status == 'completed'
+    assert not paused.state.pending_tool_requests
+    monkeypatch.setattr(service, 'get_provider', get_provider)
+    resumed = send('resume plan')
+    assert resumed.result.proposals[0].tool.value == 'request_transfer'
+
+
+def test_new_request_discards_plan_without_revoking_issued_cancellation(monkeypatch):
+    _, send, _, first = plan_session(monkeypatch)
+    balance = send('what is my balance')
+    assert balance.state.pending_plan is None
+    assert balance.result.proposals[0].tool.value == 'get_balance'
+    assert first.state.pending_tool_requests[0] in balance.state.pending_tool_requests
+
+
+def test_plan_snapshot_roundtrip_and_conversation_isolation(monkeypatch):
+    from agent.conversation import ConversationState
+    catalog, _, _, first = plan_session(monkeypatch)
+    assert ConversationState.model_validate_json(first.state.model_dump_json()) == first.state
+    wrong = process_turn(ChatInput(conversation_id='different', message='resume plan'), catalog)
+    assert not wrong.result.proposals and wrong.state.pending_plan is None
+
+
+@pytest.mark.parametrize('message', [
+    'Cancel StreamBox then transfer the savings to Bob',
+    'Cancel StreamBox then transfer -39 CNY to Bob',
+    'Cancel StreamBox then transfer 39 CNY to Bob then transfer 50 to Alice',
+    'Do not cancel StreamBox then transfer 39 CNY to Bob',
+    '"Cancel StreamBox then transfer 39 CNY to Bob"',
+])
+def test_unsupported_ordered_plan_never_issues_partial_action(monkeypatch, message):
+    _, _, _, first = plan_session(monkeypatch, message)
+    assert not first.result.proposals and first.result.needs_clarification
+    assert first.state.pending_plan is None
+
+
 @pytest.mark.parametrize('verified_state', ['active', 'missing', 'unsupported', 'cancelled', 'locked', 'ambiguous'])
 def test_subscription_listing_then_cancellation_uses_current_verified_context(monkeypatch, verified_state):
     """A displayed candidate never grants cancellation authority or supplies its ID."""
