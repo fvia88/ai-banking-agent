@@ -59,6 +59,18 @@ def is_abandonment(message: str) -> bool:
             or (len(words) == 1 and _one_typo(text, 'nevermind')))
 
 
+def is_generic_cancellation_request(message: str) -> bool:
+    """A whole direct cancellation request with no supplied merchant name.
+
+    This only starts clarification. It never selects a subscription, grants
+    permission, or proposes cancelling all records.
+    """
+    text = _request_text(message).rstrip('.!?').strip()
+    match = re.fullmatch(_REQUEST_PREFIX + r"cancel (?:(?:my|the|a) )?(?P<noun>[a-z]+)", text)
+    return bool(match and is_direct_request(message, 'cancel')
+                and any(_one_typo(match['noun'], noun) for noun in ('subscription', 'subscriptions')))
+
+
 def is_new_banking_request(message: str) -> bool:
     """Recognize clear request framing, not keywords inside a field answer.
 

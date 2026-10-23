@@ -8,7 +8,8 @@ from contracts.models import (ChatInput, AgentResult, ActionProposal, Account,
                               Recipient, Subscription, SubscriptionReport, SpendingReport, ExecutionResult, PositiveMoney)
 from contracts.tool_schemas import validate_tool_arguments
 from .provider import Intent, ProviderError, get_provider
-from .request_guard import is_direct_request, stated_word_amounts, is_new_banking_request, is_abandonment
+from .request_guard import (is_direct_request, stated_word_amounts, is_new_banking_request,
+                            is_abandonment, is_generic_cancellation_request)
 from .conversation import (ConversationState, PendingTransfer, PendingSpending,
                            PendingCancellation, ConversationTurn, PendingToolRequest)
 
@@ -356,7 +357,12 @@ def _process(chat, catalog, results, progress):
     if not continuing and not continuing_spending and not continuing_cancellation:
         exact_message = " ".join(message.strip().casefold().replace("’", "'").split()).rstrip('.!?').strip()
         local_intent = _EXACT_READ_INTENTS.get(exact_message) if not previous else None
-        if local_intent is not None:
+        if not previous and is_generic_cancellation_request(message):
+            # Never let a model turn this explicit mutation request into a read.
+            # The ordinary cancellation branch below asks for a verified name;
+            # it still checks locks/support and requires backend approval later.
+            extracted = Intent(intent='cancel')
+        elif local_intent is not None:
             extracted = Intent(intent=local_intent)
         else:
             progress.stage = "provider_request"

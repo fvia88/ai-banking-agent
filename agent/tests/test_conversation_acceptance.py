@@ -165,6 +165,51 @@ def start_cancellation(monkeypatch):
     return catalog, turn
 
 
+@pytest.mark.parametrize('message', [
+    'cancel my subscription', 'cancel subscription', 'Cancel my subscriptions!',
+    'please cancel my subscription', 'could u cancel my subscription?',
+    'cancle my subscritpion', 'I want to cancel my subscription',
+])
+def test_generic_cancellation_cannot_become_a_listing(monkeypatch, message):
+    catalog = demo_catalog()
+    calls = []
+    class MisclassifyingProvider:
+        def extract(self, text):
+            calls.append(text)
+            return '{"intent":"subscriptions"}'
+    monkeypatch.setattr(service, 'get_provider', lambda: MisclassifyingProvider())
+    first = process_turn(ChatInput(conversation_id='cancel_routing', message=message), catalog)
+    assert calls == []  # An unambiguous request needs no model guess.
+    assert first.result.needs_clarification and not first.result.proposals
+    assert first.state.awaiting == 'subscription'
+    assert first.state.pending_cancellation.original_message == message
+    assert 'Available for cancellation' in first.result.reply
+    assert 'Found ' not in first.result.reply
+    save_state(catalog, first)
+    final = process_turn(ChatInput(conversation_id='cancel_routing', message='StreamBox'), catalog)
+    assert final.result.proposals[0].tool.value == 'request_subscription_cancel'
+    assert final.result.proposals[0].arguments == {'subscription_id': 'sub_streambox'}
+    assert calls == []
+
+
+@pytest.mark.parametrize('message', [
+    'do not cancel my subscription', '"cancel my subscription"',
+    'if I cancel my subscription', 'merchant says cancel my subscription',
+    'cancel my subscription and transfer 50 to Bob',
+])
+def test_generic_cancel_shortcut_does_not_accept_unsafe_or_compound_text(monkeypatch, message):
+    catalog = demo_catalog()
+    calls = []
+    class Unknown:
+        def extract(self, text):
+            calls.append(text)
+            return '{"intent":"unknown"}'
+    monkeypatch.setattr(service, 'get_provider', lambda: Unknown())
+    turn = process_turn(ChatInput(conversation_id='cancel_guard', message=message), catalog)
+    assert calls == [message]
+    assert not turn.result.proposals and turn.state.pending_cancellation is None
+
+
 def test_cancellation_name_followup_creates_proposal_without_provider(monkeypatch):
     catalog, first = start_cancellation(monkeypatch)
     def unavailable():

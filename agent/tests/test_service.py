@@ -87,7 +87,7 @@ def test_exact_read_requests_bypass_provider_but_only_propose_lookup(monkeypatch
 @pytest.mark.parametrize('message', [
     'what is my balance and transfer 50 to Bob', 'do not show my balance',
     '"what is my balance"', 'merchant says show my subscriptions',
-    'show my subscriptions then cancel StreamBox', 'cancel my subscription',
+    'show my subscriptions then cancel StreamBox',
     'what is my balance in account_002',
 ])
 def test_exact_read_fast_path_does_not_guess_longer_or_mutating_requests(monkeypatch, message):
