@@ -23,6 +23,45 @@ def retain_proposal(catalog, proposal):
         entry["context"]["conversation_state"] = state.model_dump(mode="json")
 
 
+@pytest.mark.parametrize('message', ['hello', 'HI!', 'hey there', 'good morning', 'nihao',
+                                     '你好', 'ok', 'oki', 'thank you', 'help', 'what can you do?'])
+def test_standalone_social_messages_do_not_call_provider(monkeypatch, message):
+    def unavailable():
+        raise AssertionError('Standalone social messages should be immediate')
+    monkeypatch.setattr(service, 'get_provider', unavailable)
+    result = run(message)
+    assert result.reply
+    assert not result.proposals and not result.needs_clarification
+    assert 'No new action' not in result.reply
+
+
+def test_acknowledgement_preserves_issued_proposal_without_confirming(monkeypatch):
+    catalog = demo_catalog()
+    issued = service.process_turn(ChatInput(conversation_id='test', message='Transfer 30 to Bob'), catalog)
+    for entry in catalog:
+        entry['context']['conversation_state'] = issued.state.model_dump(mode='json')
+    def unavailable():
+        raise AssertionError('Acknowledgements should not call provider')
+    monkeypatch.setattr(service, 'get_provider', unavailable)
+    turn = service.process_turn(ChatInput(conversation_id='test', message='okay'), catalog)
+    assert turn.state == issued.state
+    assert not turn.result.proposals
+    assert 'does not confirm or execute' in turn.result.reply
+
+
+@pytest.mark.parametrize('message', ['hello transfer 50 to Bob', 'okay send 50 to Bob',
+                                     'help me cancel StreamBox', '"hello"'])
+def test_social_words_do_not_intercept_longer_requests(monkeypatch, message):
+    calls = []
+    class Unknown:
+        def extract(self, text):
+            calls.append(text)
+            return '{"intent":"unknown"}'
+    monkeypatch.setattr(service, 'get_provider', lambda: Unknown())
+    assert not run(message).proposals
+    assert calls == [message]
+
+
 @pytest.mark.parametrize("failure,stage,category,http", [
     (ProviderError("SECRET_PROVIDER_BODY", category="network_connection_error"),
      "provider_request", "network_connection_error", "None"),

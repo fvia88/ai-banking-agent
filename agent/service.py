@@ -139,6 +139,23 @@ def process_turn(chat: ChatInput, tool_catalog: list[dict],
             return ConversationTurn(result=AgentResult(reply=reply),
                                     state=ConversationState(conversation_id=chat.conversation_id,
                                         pending_tool_requests=original.pending_tool_requests))
+        # Standalone social/help messages need no remote interpretation. Match
+        # the whole message only, after state validation, and never intercept a
+        # field answer or a trusted tool-result continuation.
+        if not tool_results and original.awaiting is None:
+            social = " ".join(chat.message.strip().casefold().split()).rstrip('.!?').strip()
+            help_reply = "I can help with balances, spending, subscriptions, transfers, or cancellations. What would you like to do?"
+            reply = None
+            if social in {'hi', 'hello', 'hey', 'hi there', 'hello there', 'hey there',
+                          'good morning', 'good afternoon', 'good evening', 'nihao', '你好'}:
+                reply = "Hello! " + help_reply
+            elif social in {'help', 'what can you do', 'what can you help me with'}:
+                reply = help_reply
+            elif social in {'ok', 'okay', 'oki', 'thanks', 'thank you', 'thankyou', 'ty', 'got it', 'understood'}:
+                reply = ("Acknowledged. This does not confirm or execute any proposed action."
+                         if original.pending_tool_requests else "You're welcome. What would you like help with next?")
+            if reply is not None:
+                return ConversationTurn(result=AgentResult(reply=reply), state=original)
         progress = _Progress(original)
         progress.stage = "request_processing"
         result = _process(chat, tool_catalog, tool_results or [], progress)

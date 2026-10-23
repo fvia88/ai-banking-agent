@@ -304,3 +304,26 @@ def test_abandonment_variants_require_standalone_command(monkeypatch, command):
     supply(catalog, state)
     turn = service.process_turn(ChatInput(conversation_id='c1', message=command), catalog)
     assert turn.state == state and not turn.result.proposals
+
+
+def test_social_words_do_not_clear_or_replace_an_unfinished_draft(monkeypatch):
+    catalog, state = initial(monkeypatch)
+    supply(catalog, state)
+    def unavailable():
+        raise AssertionError('A field answer must still be handled locally')
+    monkeypatch.setattr(service, 'get_provider', unavailable)
+    for message in ['hello', 'okay', 'help']:
+        turn = service.process_turn(ChatInput(conversation_id='c1', message=message), catalog)
+        assert turn.state == state
+        assert turn.result.needs_clarification and not turn.result.proposals
+
+
+def test_verified_subscription_named_like_a_greeting_is_still_a_field_answer(monkeypatch):
+    monkeypatch.setenv('AGENT_PROVIDER', 'mock')
+    catalog = demo_catalog()
+    for entry in catalog:
+        entry['context']['subscriptions'][0]['merchant'] = 'Hello'
+    draft = service.process_turn(ChatInput(conversation_id='c1', message='Cancel my subscription'), catalog)
+    supply(catalog, draft.state)
+    turn = service.process_turn(ChatInput(conversation_id='c1', message='hello'), catalog)
+    assert turn.result.proposals[0].arguments == {'subscription_id': 'sub_streambox'}

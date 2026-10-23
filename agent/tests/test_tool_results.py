@@ -321,6 +321,14 @@ def test_requested_account_must_still_be_available(monkeypatch):
     assert "5000.00" not in rejected.result.reply and rejected.state == state
 
 
+def test_social_message_does_not_hide_a_trusted_tool_result(monkeypatch):
+    chat, catalog, _, envelope = request(monkeypatch)
+    continued = ChatInput(conversation_id=chat.conversation_id, message='hello')
+    outcome = service.process_turn(continued, catalog, [envelope])
+    assert outcome.result.reply == 'Verified balance: CNY 5000.00.'
+    assert not outcome.state.pending_tool_requests
+
+
 @pytest.mark.parametrize('message', ['Transfer 50 to Bob', 'Cancel StreamBox'])
 @pytest.mark.parametrize('status', ['PENDING_CONFIRMATION', 'PENDING_MFA',
                                     'COMPLETED', 'REJECTED', 'FAILED', 'CANCELLED'])
