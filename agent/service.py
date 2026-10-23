@@ -8,7 +8,7 @@ from contracts.models import (ChatInput, AgentResult, ActionProposal, Account,
                               Recipient, Subscription, SubscriptionReport, SpendingReport, ExecutionResult, PositiveMoney)
 from contracts.tool_schemas import validate_tool_arguments
 from .provider import Intent, ProviderError, get_provider
-from .request_guard import is_direct_request, stated_word_amounts, is_new_banking_request
+from .request_guard import is_direct_request, stated_word_amounts, is_new_banking_request, is_abandonment
 from .conversation import (ConversationState, PendingTransfer, PendingSpending,
                            PendingCancellation, ConversationTurn, PendingToolRequest)
 
@@ -132,8 +132,7 @@ def process_turn(chat: ChatInput, tool_catalog: list[dict],
         # A standalone abandonment command concerns the local unfinished draft,
         # not approval, execution, or subscription cancellation. Do not swallow
         # an execution result if this call is actually processing tool results.
-        command = chat.message.strip().casefold().rstrip(".!?").strip()
-        if not tool_results and command in {"never mind", "nevermind"}:
+        if not tool_results and is_abandonment(chat.message):
             reply = ("Unfinished request discarded." if any(draft is not None for draft in
                      (original.pending_transfer, original.pending_spending, original.pending_cancellation))
                      else "There is no unfinished request to discard.")

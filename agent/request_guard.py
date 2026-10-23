@@ -2,6 +2,62 @@
 import re
 from decimal import Decimal
 
+_REQUEST_PREFIX = r"(?:(?:please|pls|plz|(?:can|could|cld|would|will) (?:you|u)(?: please| pls| plz)?|i (?:want to|would like to|wanna)|i'd like to)\s+)?"
+
+
+def _one_typo(word: str, target: str) -> bool:
+    """At most one insertion/deletion/substitution or adjacent transposition."""
+    if word == target:
+        return True
+    if abs(len(word) - len(target)) > 1:
+        return False
+    if len(word) == len(target):
+        different = [i for i, (a, b) in enumerate(zip(word, target)) if a != b]
+        return (len(different) == 1 or
+                (len(different) == 2 and different[1] == different[0] + 1
+                 and word[different[0]] == target[different[1]]
+                 and word[different[1]] == target[different[0]]))
+    short, long = (word, target) if len(word) < len(target) else (target, word)
+    return any(long[:i] + long[i + 1:] == short for i in range(len(long)))
+
+
+def _request_text(message: str) -> str:
+    """Normalize command positions only, for guards; never rewrite field data."""
+    text = " ".join(message.strip().casefold().replace("’", "'").split())
+    match = re.match(r"^" + _REQUEST_PREFIX + r"(?P<verb>[a-z]+)(?=\s|$)", text)
+    if not match:
+        return text
+    word = match['verb']
+    aliases = {'trf': 'transfer', 'xfer': 'transfer', 'snd': 'send', 'sned': 'send'}
+    canonical = aliases.get(word)
+    if canonical is None and len(word) >= 4:
+        matches = {('analyze' if v == 'analyse' else v) for v in
+                   ('transfer', 'cancel', 'analyze', 'analyse') if _one_typo(word, v)}
+        if len(matches) == 1:
+            canonical = matches.pop()
+    if canonical:
+        text = text[:match.start('verb')] + canonical + text[match.end('verb'):]
+    # Only the noun position of an explicit read request is eligible. Names,
+    # amounts, dates and free text elsewhere are never fuzzy-corrected.
+    read = re.match(r"^" + _REQUEST_PREFIX +
+                    r"(?:what is|what's|whats|show|check|get|tell me|analyze|analyse) "
+                    r"(?:me )?(?:my |the )?(?P<noun>[a-z]+)\b", text)
+    if read and len(read['noun']) >= 4:
+        matches = {v for v in ('balance', 'spending', 'subscriptions') if _one_typo(read['noun'], v)}
+        if len(matches) == 1:
+            text = text[:read.start('noun')] + matches.pop() + text[read.end('noun'):]
+    return text
+
+
+def is_abandonment(message: str) -> bool:
+    """A standalone draft-abandonment command, never an action revocation."""
+    text = " ".join(message.strip().casefold().split()).rstrip('.!?').strip()
+    if text in {'nvm', 'nvr mind', 'nvrmind'}:
+        return True
+    words = text.split()
+    return ((len(words) == 2 and words[0] == 'never' and _one_typo(words[1], 'mind'))
+            or (len(words) == 1 and _one_typo(text, 'nevermind')))
+
 
 def is_new_banking_request(message: str) -> bool:
     """Recognize clear request framing, not keywords inside a field answer.
@@ -12,11 +68,11 @@ def is_new_banking_request(message: str) -> bool:
     """
     if is_direct_request(message, "transfer") or is_direct_request(message, "cancel"):
         return True
-    text = " ".join(message.strip().casefold().replace("’", "'").split())
+    text = _request_text(message)
     # Read requests must also be direct, not quoted or hypothetical instructions.
     if re.search(r'["“”`:]|\b(if|unless|not|never|example|hypothetical|imagine|pretend|merchant|note|says|said|instructions?)\b', text):
         return False
-    prefix = r"(?:(?:please|(?:can|could|cld|would|will) (?:you|u)(?: please)?)\s+)?"
+    prefix = _REQUEST_PREFIX
     reads = (r"(?:(?:what is|what's|whats|show|check|get|tell me) (?:me )?(?:my |the )?balance"
              r"|(?:analyze|analyse) (?:my |the )?spending"
              r"|(?:list|show|get) (?:me )?(?:my |the )?subscriptions)\b")
@@ -24,7 +80,7 @@ def is_new_banking_request(message: str) -> bool:
 
 
 def is_direct_request(message: str, intent: str) -> bool:
-    text = " ".join(message.strip().casefold().replace("’", "'").split())
+    text = _request_text(message)
     # When framing is ambiguous, ask for a fresh explicit request. These checks
     # intentionally reject some valid wording rather than treating data as orders.
     if re.search(r"\b(not|never|don't|dont|do not|cannot|can't|without|if|unless|example|hypothetical|imagine|pretend)\b", text):
@@ -35,7 +91,7 @@ def is_direct_request(message: str, intent: str) -> bool:
         return False
     # Gemini still chooses intent and extracts all fields. This only accepts
     # direct imperative framing with common polite request prefixes.
-    prefix = r"(?:(?:please|(?:can|could|cld|would|will) (?:you|u)(?: please)?|i (?:want to|would like to|wanna)|i'd like to)\s+)?"
+    prefix = _REQUEST_PREFIX
     verbs = r"(?:transfer|send|pay|give)" if intent == "transfer" else r"cancel"
     return re.match(r"^" + prefix + verbs + r"\b\s+\S", text) is not None
 

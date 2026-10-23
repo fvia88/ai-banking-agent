@@ -7,6 +7,12 @@ intent: balance, spending, subscriptions, transfer, cancel, or unknown.
 amount is a decimal string or null; recipient is a name or null;
 period is explicit YYYY-MM or null; subscription is a merchant name or null.
 Recognize polite direct requests and ordinary wording variations.
+Understand ordinary command misspellings (missing/repeated/swapped letters) and
+common abbreviations, including transfer/send/cancel and balance/spending queries.
+Use context to choose an intent; return unknown when meaning is uncertain.
+Do not silently correct recipient or merchant identities, amounts, or dates.
+An explicit transfer with a zero or negative amount is still transfer intent:
+preserve the stated amount, including its sign, so Python can request correction.
 Normalize common request abbreviations such as 'could u' and 'cld u'. Convert
 explicit number words such as 'five hundred yuan' to amount '500.00'. Never guess
 an unstated amount.
