@@ -329,6 +329,29 @@ def test_social_message_does_not_hide_a_trusted_tool_result(monkeypatch):
     assert not outcome.state.pending_tool_requests
 
 
+def test_fast_balance_uses_fresh_results_instead_of_caching_numbers(monkeypatch):
+    def unavailable():
+        raise AssertionError('Exact read and result formatting must not call Gemini')
+    monkeypatch.setattr(service, 'get_provider', unavailable)
+    catalog = demo_catalog()
+    chat = ChatInput(conversation_id='fresh_fast_reads', message='what is my balance')
+    proposal_ids = []
+    for balance in ['5000.00', '4930.00']:
+        proposed = service.process_turn(chat, catalog)
+        assert len(proposed.result.proposals) == 1
+        proposal = proposed.result.proposals[0]
+        proposal_ids.append(proposal.proposal_id)
+        assert balance not in proposed.result.reply
+        retain(catalog, proposed.state)
+        envelope = read_result(chat, proposal)
+        envelope['data']['balance'] = balance
+        accepted = service.process_turn(chat, catalog, [envelope])
+        assert accepted.result.reply == f'Verified balance: CNY {balance}.'
+        assert not accepted.result.proposals and not accepted.state.pending_tool_requests
+        retain(catalog, accepted.state)
+    assert proposal_ids[0] != proposal_ids[1]
+
+
 @pytest.mark.parametrize('message', ['Transfer 50 to Bob', 'Cancel StreamBox'])
 @pytest.mark.parametrize('status', ['PENDING_CONFIRMATION', 'PENDING_MFA',
                                     'COMPLETED', 'REJECTED', 'FAILED', 'CANCELLED'])

@@ -265,7 +265,8 @@ def test_failed_new_request_retains_previous_draft(monkeypatch):
         def extract(self, message):
             raise ProviderError("offline", category="network_connection_error")
     monkeypatch.setattr(service, "get_provider", lambda: Broken())
-    turn = service.process_turn(ChatInput(conversation_id="c1", message="What is my balance?"), catalog)
+    # A clear task switch outside the exact local read shortcuts.
+    turn = service.process_turn(ChatInput(conversation_id="c1", message="Check my balance"), catalog)
     assert turn.state == state
     assert not turn.result.proposals
 

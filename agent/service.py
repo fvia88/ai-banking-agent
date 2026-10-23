@@ -14,6 +14,15 @@ from .conversation import (ConversationState, PendingTransfer, PendingSpending,
 
 logger = logging.getLogger(__name__)
 
+# Exact whole-message shortcuts only. These select a read tool, never an answer;
+# all context/argument validation and trusted-result grounding still run below.
+_EXACT_READ_INTENTS = {
+    'what is my balance': 'balance', "what's my balance": 'balance',
+    'whats my balance': 'balance', 'show my balance': 'balance',
+    'show my subscriptions': 'subscriptions', 'list my subscriptions': 'subscriptions',
+    'list subscriptions': 'subscriptions',
+}
+
 
 @dataclass
 class _Progress:
@@ -345,10 +354,15 @@ def _process(chat, catalog, results, progress):
             elif re.fullmatch(r"[+-]?\d+(?:\.\d+)?", chat.message.strip()):
                 message = re.sub(r"^(transfer|send)\b", r"\1 " + chat.message, previous, flags=re.I)
     if not continuing and not continuing_spending and not continuing_cancellation:
-        progress.stage = "provider_request"
-        payload = get_provider().extract(message)
-        progress.stage = "intent_validation"
-        extracted = Intent.model_validate_json(payload)
+        exact_message = " ".join(message.strip().casefold().replace("’", "'").split()).rstrip('.!?').strip()
+        local_intent = _EXACT_READ_INTENTS.get(exact_message) if not previous else None
+        if local_intent is not None:
+            extracted = Intent(intent=local_intent)
+        else:
+            progress.stage = "provider_request"
+            payload = get_provider().extract(message)
+            progress.stage = "intent_validation"
+            extracted = Intent.model_validate_json(payload)
     progress.stage = "proposal_validation"
     mapping = {"balance": "get_balance", "spending": "analyze_spending",
                "subscriptions": "list_subscriptions", "transfer": "request_transfer",
