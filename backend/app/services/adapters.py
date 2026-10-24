@@ -142,7 +142,22 @@ class AgentAdapterService:
 
 class SecurityAdapterService:
     def __init__(self, use_mock: bool | None = None):
-        self.use_mock = use_mock if use_mock is not None else os.getenv("USE_MOCK_SECURITY", "false").lower() == "true"
+        # Reads USE_MOCK_SECURITY env var (default: True)
+        if use_mock is not None:
+            if not isinstance(use_mock, bool):
+                raise ValueError(f"Invalid use_mock={use_mock!r}; expected a boolean or None")
+            self.use_mock = use_mock
+        else:
+            raw_mode = os.getenv("USE_MOCK_SECURITY", "true")
+            normalized_mode = raw_mode.lower()
+            if normalized_mode == "true":
+                self.use_mock = True
+            elif normalized_mode == "false":
+                self.use_mock = False
+            else:
+                raise ValueError(
+                    f"Invalid USE_MOCK_SECURITY={raw_mode!r}; expected 'true' or 'false'"
+                )
 
     def evaluate(self, proposal: ActionProposal, context: BankingContext) -> PolicyDecision:
         if self.use_mock:

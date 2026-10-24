@@ -1439,3 +1439,253 @@ def test_amount_negative_zero_string_rejected(default_context):
     assert decision.requires_confirmation is False
     assert decision.requires_mfa is False
     assert decision.reason_code == SecurityReasonCode.INVALID_TOOL_ARGUMENTS
+
+
+# ============================================================================
+# 20. PHASE B3 — ADDITIONAL INDEPENDENT POLICY COVERAGE
+# ============================================================================
+
+
+def test_action_proposal_with_unrecognized_tool_string_returns_unknown_tool(default_context):
+    """Real ActionProposal instance with an unwhitelisted tool string hits Step 2 UNKNOWN_TOOL."""
+    proposal = ActionProposal.model_construct(
+        proposal_id="prop_unk_str",
+        tool="execute_wire_override",
+        arguments={"account_id": "account_001"},
+        rationale="Bypassed enum validation upstream",
+    )
+    decision = evaluate_action(proposal, default_context)
+    assert decision.tier == Tier.RED
+    assert decision.allowed_to_proceed is False
+    assert decision.requires_confirmation is False
+    assert decision.requires_mfa is False
+    assert decision.reason_code == SecurityReasonCode.UNKNOWN_TOOL
+
+
+@pytest.mark.parametrize("bad_source_account", [None, ""])
+def test_explicit_none_or_empty_source_account_id_rejected(default_context, bad_source_account):
+    """Explicitly passing None or empty string for source_account_id fails closed."""
+    proposal = ActionProposal(
+        proposal_id="prop_bad_src_acc",
+        tool=ToolName.REQUEST_TRANSFER,
+        arguments={
+            "source_account_id": bad_source_account,
+            "recipient_id": "recipient_alice",
+            "amount": "100.00",
+            "currency": "CNY",
+        },
+    )
+    decision = evaluate_action(proposal, default_context)
+    assert decision.tier == Tier.RED
+    assert decision.allowed_to_proceed is False
+    assert decision.requires_confirmation is False
+    assert decision.requires_mfa is False
+    assert decision.reason_code == SecurityReasonCode.INVALID_TOOL_ARGUMENTS
+
+
+@pytest.mark.parametrize(
+    "bad_cancel_args",
+    [
+        {},
+        {"subscription_id": None},
+        {"subscription_id": ""},
+        {"subscription_id": "sub_netflix", "force_immediate": True},
+    ],
+)
+def test_subscription_cancel_malformed_and_extra_arguments_rejected(
+    default_context, bad_cancel_args
+):
+    """Subscription cancellation with missing, null, empty, or extra arguments fails closed."""
+    proposal = ActionProposal(
+        proposal_id="prop_bad_cancel",
+        tool=ToolName.REQUEST_SUBSCRIPTION_CANCEL,
+        arguments=bad_cancel_args,
+    )
+    decision = evaluate_action(proposal, default_context)
+    assert decision.tier == Tier.RED
+    assert decision.allowed_to_proceed is False
+    assert decision.requires_confirmation is False
+    assert decision.requires_mfa is False
+    assert decision.reason_code == SecurityReasonCode.INVALID_TOOL_ARGUMENTS
+
+
+def test_id_fields_max_length_boundary_128_vs_129(default_context):
+    """ID fields allow exactly 128 characters and reject 129 characters."""
+    id_128 = "a" * 128
+    id_129 = "a" * 129
+
+    # 128-character recipient_id and subscription_id are valid
+    valid_transfer = ActionProposal(
+        proposal_id="prop_id_128",
+        tool=ToolName.REQUEST_TRANSFER,
+        arguments={
+            "source_account_id": "account_001",
+            "recipient_id": id_128,
+            "amount": "100.00",
+            "currency": "CNY",
+        },
+    )
+    assert evaluate_action(valid_transfer, default_context).allowed_to_proceed is True
+
+    # 129-character IDs are rejected across tools
+    overlong_cases = [
+        (
+            ToolName.REQUEST_TRANSFER,
+            {
+                "source_account_id": id_129,
+                "recipient_id": "recipient_alice",
+                "amount": "100.00",
+                "currency": "CNY",
+            },
+        ),
+        (
+            ToolName.REQUEST_TRANSFER,
+            {
+                "source_account_id": "account_001",
+                "recipient_id": id_129,
+                "amount": "100.00",
+                "currency": "CNY",
+            },
+        ),
+        (ToolName.GET_BALANCE, {"account_id": id_129}),
+        (ToolName.REQUEST_SUBSCRIPTION_CANCEL, {"subscription_id": id_129}),
+    ]
+    for tool, args in overlong_cases:
+        prop = ActionProposal(proposal_id="prop_id_129", tool=tool, arguments=args)
+        dec = evaluate_action(prop, default_context)
+        assert dec.allowed_to_proceed is False
+        assert dec.tier == Tier.RED
+        assert dec.reason_code == SecurityReasonCode.INVALID_TOOL_ARGUMENTS
+
+
+@pytest.mark.parametrize(
+    "tool,base_args",
+    [
+        (ToolName.GET_BALANCE, {"account_id": "account_001"}),
+        (ToolName.ANALYZE_SPENDING, {"account_id": "account_001", "period": "2026-10"}),
+        (ToolName.LIST_SUBSCRIPTIONS, {"account_id": "account_001"}),
+        (
+            ToolName.REQUEST_TRANSFER,
+            {
+                "source_account_id": "account_001",
+                "recipient_id": "recipient_alice",
+                "amount": "100.00",
+                "currency": "CNY",
+            },
+        ),
+        (ToolName.REQUEST_SUBSCRIPTION_CANCEL, {"subscription_id": "sub_01"}),
+    ],
+)
+@pytest.mark.parametrize(
+    "metadata_key,metadata_val",
+    [
+        ("action_id", "act_1234567890ab"),
+        ("action_digest", "0" * 64),
+        ("tier", "YELLOW"),
+    ],
+)
+def test_server_approval_metadata_injected_into_arguments_rejected(
+    default_context, tool, base_args, metadata_key, metadata_val
+):
+    """
+    Any proposal whose arguments are polluted with server approval metadata
+    (action_id, action_digest, tier) must be rejected by evaluate_action.
+    """
+    polluted_args = {**base_args, metadata_key: metadata_val}
+    proposal = ActionProposal(
+        proposal_id="prop_polluted_meta",
+        tool=tool,
+        arguments=polluted_args,
+    )
+    decision = evaluate_action(proposal, default_context)
+    assert decision.allowed_to_proceed is False
+    assert decision.tier == Tier.RED
+    assert decision.requires_confirmation is False
+    assert decision.requires_mfa is False
+    assert decision.reason_code == SecurityReasonCode.INVALID_TOOL_ARGUMENTS
+
+
+@pytest.mark.parametrize(
+    "tool,args",
+    [
+        (ToolName.ANALYZE_SPENDING, {"account_id": "account_001", "period": "2026-10"}),
+        (ToolName.LIST_SUBSCRIPTIONS, {"account_id": "account_001"}),
+    ],
+)
+def test_locked_account_read_only_tools_analyze_and_subscriptions(tool, args):
+    """Verifies ANALYZE_SPENDING and LIST_SUBSCRIPTIONS respect lock_denies_read_only."""
+    locked_context = BankingContext(
+        user_id="user_001",
+        account_id="account_001",
+        daily_transfer_total=Decimal("0.00"),
+        account_balance=Decimal("5000.00"),
+        account_locked=True,
+    )
+    proposal = ActionProposal(proposal_id="prop_ro_lock", tool=tool, arguments=args)
+
+    default_decision = evaluate_action(proposal, locked_context)
+    assert default_decision.tier == Tier.GREEN
+    assert default_decision.allowed_to_proceed is True
+    assert default_decision.reason_code == SecurityReasonCode.READ_ONLY_ACCESS
+
+    strict_decision = evaluate_action(
+        proposal, locked_context, config=PolicyConfig(lock_denies_read_only=True)
+    )
+    assert strict_decision.tier == Tier.RED
+    assert strict_decision.allowed_to_proceed is False
+    assert strict_decision.reason_code == SecurityReasonCode.ACCOUNT_LOCKED
+
+
+def test_locked_account_precedes_source_account_mismatch():
+    """Step 4 (ACCOUNT_LOCKED) executes before Step 5 (SOURCE_ACCOUNT_MISMATCH)."""
+    locked_context = BankingContext(
+        user_id="user_001",
+        account_id="account_001",
+        daily_transfer_total=Decimal("0.00"),
+        account_balance=Decimal("5000.00"),
+        account_locked=True,
+    )
+    proposal = ActionProposal(
+        proposal_id="prop_lock_and_mismatch",
+        tool=ToolName.REQUEST_TRANSFER,
+        arguments={
+            "source_account_id": "account_002",
+            "recipient_id": "recipient_alice",
+            "amount": "100.00",
+            "currency": "CNY",
+        },
+    )
+    decision = evaluate_action(proposal, locked_context)
+    assert decision.tier == Tier.RED
+    assert decision.allowed_to_proceed is False
+    assert decision.reason_code == SecurityReasonCode.ACCOUNT_LOCKED
+
+
+def test_policy_config_enforce_account_matching_false(default_context):
+    """When PolicyConfig(enforce_account_matching=False) is set, cross-account checks are skipped."""
+    relaxed_config = PolicyConfig(enforce_account_matching=False)
+
+    tx_proposal = ActionProposal(
+        proposal_id="prop_relaxed_tx",
+        tool=ToolName.REQUEST_TRANSFER,
+        arguments={
+            "source_account_id": "account_002",
+            "recipient_id": "recipient_alice",
+            "amount": "100.00",
+            "currency": "CNY",
+        },
+    )
+    tx_decision = evaluate_action(tx_proposal, default_context, config=relaxed_config)
+    assert tx_decision.allowed_to_proceed is True
+    assert tx_decision.tier == Tier.YELLOW
+    assert tx_decision.reason_code == SecurityReasonCode.TRANSFER_WITHIN_DAILY_LIMIT
+
+    read_proposal = ActionProposal(
+        proposal_id="prop_relaxed_read",
+        tool=ToolName.GET_BALANCE,
+        arguments={"account_id": "account_002"},
+    )
+    read_decision = evaluate_action(read_proposal, default_context, config=relaxed_config)
+    assert read_decision.allowed_to_proceed is True
+    assert read_decision.tier == Tier.GREEN
+    assert read_decision.reason_code == SecurityReasonCode.READ_ONLY_ACCESS
