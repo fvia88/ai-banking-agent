@@ -3,7 +3,9 @@ import json
 from pathlib import Path
 from decimal import Decimal
 from app.db.session import SessionLocal, Base, engine
+from app.db.migrate import upgrade_database
 from app.db.models import UserModel, AccountModel, TransactionModel
+from app.db.subscription_seed import seed_subscriptions
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 FIXTURES_DIR = PROJECT_ROOT / "fixtures"
@@ -16,11 +18,13 @@ def load_fixture(filename: str):
 
 def seed_database():
     """Initialize an empty demo DB without resetting existing user data."""
-    Base.metadata.create_all(bind=engine)
+    upgrade_database(engine)
     
     db = SessionLocal()
     try:
         if db.query(UserModel.user_id).first() is not None:
+            seed_subscriptions(db, load_fixture("subscriptions.json"))
+            db.commit()
             print("Database already contains users; existing data preserved.")
             return
         # --- 1. Seed Users from fixtures/users.json ---
@@ -113,6 +117,8 @@ def seed_database():
         ]
         db.add_all(demo_txs)
 
+        db.flush()
+        seed_subscriptions(db, load_fixture("subscriptions.json"))
         db.commit()
         print("Database successfully seeded from fixtures/ (user_001 / account_001) and demo profile.")
     except Exception:

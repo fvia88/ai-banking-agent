@@ -29,6 +29,8 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg2://banking_user:banking_password@postgres:5432/banking_db
       USE_MOCK_AGENT: "${USE_MOCK_AGENT:-false}"
+      USE_MOCK_SECURITY: "${USE_MOCK_SECURITY:-false}"
+      USE_MOCK_SUBSCRIPTIONS: "${USE_MOCK_SUBSCRIPTIONS:-false}"
       AGENT_PROVIDER: "${AGENT_PROVIDER:-mock}"
       GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
       GEMINI_MODEL: "${GEMINI_MODEL:-gemini-3.1-flash-lite}"

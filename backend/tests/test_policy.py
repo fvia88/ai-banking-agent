@@ -80,7 +80,7 @@ def test_missing_recipient_id_rejected():
         account_balance="1000.00",
         account_locked=False
     )
-    with pytest.raises(ValueError, match="Missing or empty required field: 'recipient_id'"):
+    with pytest.raises(ValueError, match="INVALID_TOOL_ARGUMENTS"):
         create_action_record("u1", proposal, "acc1", context)
 
 def test_locked_user_can_check_balance_but_cannot_transfer(client, db_session):

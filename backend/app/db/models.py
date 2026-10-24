@@ -42,6 +42,20 @@ class TransactionModel(Base):
 
     account = relationship("AccountModel", back_populates="transactions")
 
+class SubscriptionModel(Base):
+    __tablename__ = "subscriptions"
+
+    subscription_id = Column(String(128), primary_key=True)
+    user_id = Column(String(64), ForeignKey("users.user_id"), nullable=False)
+    account_id = Column(String(64), ForeignKey("accounts.account_id"), nullable=False)
+    merchant = Column(String(128), nullable=False)
+    estimated_amount = Column(Numeric(16, 2), nullable=False)
+    cadence = Column(String(16), nullable=False)
+    status = Column(String(16), nullable=False, default="active")
+    cancellation_supported = Column(Boolean, nullable=False, default=False)
+    cancelled_at = Column(DateTime, nullable=True)
+
+
 class AuditLogModel(Base):
     __tablename__ = "audit_logs"
     

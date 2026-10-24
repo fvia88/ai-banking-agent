@@ -2,6 +2,7 @@
 # troubleshooting tool for gemini connection
 # run with python -m agent.diagnose
 import argparse
+from time import perf_counter
 from .gemini_provider import GeminiProvider
 from .provider import Intent, ProviderError
 from pydantic import ValidationError
@@ -9,6 +10,7 @@ from pydantic import ValidationError
 
 def main(message="What is my balance?", expected_intent="balance"):
     print("Live Gemini diagnostic (one request, no bank operations)")
+    started = perf_counter()
     try:
         payload = GeminiProvider().extract(message)
         intent = Intent.model_validate_json(payload)
@@ -42,6 +44,8 @@ def main(message="What is my balance?", expected_intent="balance"):
     except ValidationError:
         print("RESULT: invalid_model_output; local Pydantic validation failed")
         return 1
+    finally:
+        print(f"ELAPSED_SECONDS: {perf_counter() - started:.3f}")
 
 
 if __name__ == "__main__":
@@ -49,5 +53,8 @@ if __name__ == "__main__":
     parser.add_argument("--message", default="What is my balance?")
     parser.add_argument("--expected-intent", default="balance",
                         choices=["balance", "spending", "subscriptions", "transfer", "cancel", "unknown"])
+    parser.add_argument("--repeat", type=int, choices=range(1, 6), default=1,
+                        help="Run 1-5 sequential probes in one process to compare connection reuse")
     args = parser.parse_args()
-    raise SystemExit(main(args.message, args.expected_intent))
+    codes = [main(args.message, args.expected_intent) for _ in range(args.repeat)]
+    raise SystemExit(max(codes))

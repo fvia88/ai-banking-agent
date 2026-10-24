@@ -8,6 +8,111 @@ from contracts.models import ChatInput
 from agent.mock_tools import demo_catalog
 
 
+@pytest.fixture(autouse=True)
+def reset_worker_transport():
+    from agent.gemini_provider import _close_thread_client
+    _close_thread_client()
+    yield
+    _close_thread_client()
+
+
+@pytest.mark.parametrize('change,recreated', [('none', False), ('model', False),
+                                             ('key', True), ('timeout', True), ('proxy', True)])
+def test_connection_reuse_keeps_requests_separate_and_refreshes_configuration(monkeypatch, change, recreated):
+    monkeypatch.setenv('GEMINI_API_KEY', 'synthetic-key-one')
+    monkeypatch.setenv('GEMINI_MODEL', 'gemini-3.5-flash-lite')
+    monkeypatch.setenv('AGENT_TIMEOUT_SECONDS', '20')
+    created, calls, closed = [], [], []
+    class Client:
+        def __init__(self, **kwargs):
+            created.append(kwargs)
+            self.models = self
+        def close(self):
+            closed.append(self)
+        def generate_content(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(candidates=[SimpleNamespace(content=SimpleNamespace(parts=[
+                SimpleNamespace(text='{"intent":"balance"}', thought=False)]))])
+    monkeypatch.setattr(genai, 'Client', Client)
+    GeminiProvider().extract('first message')
+    if change == 'model': monkeypatch.setenv('GEMINI_MODEL', 'another-model')
+    if change == 'key': monkeypatch.setenv('GEMINI_API_KEY', 'synthetic-key-two')
+    if change == 'timeout': monkeypatch.setenv('AGENT_TIMEOUT_SECONDS', '30')
+    if change == 'proxy': monkeypatch.setenv('HTTPS_PROXY', 'http://synthetic-proxy.invalid')
+    GeminiProvider().extract('second message')  # New provider instance, same worker.
+    assert len(created) == (2 if recreated else 1)
+    assert len(closed) == (1 if recreated else 0)
+    assert [call['contents'] for call in calls] == ['first message', 'second message']
+    assert calls[-1]['model'] == ('another-model' if change == 'model' else 'gemini-3.5-flash-lite')
+    assert created[-1]['http_options'].retry_options.attempts == 1
+
+
+def test_failed_connection_is_closed_before_next_request(monkeypatch):
+    import httpx
+    monkeypatch.setenv('GEMINI_API_KEY', 'synthetic-key')
+    created, closed = [], []
+    class Client:
+        def __init__(self, **kwargs):
+            created.append(self)
+            self.models = self
+        def close(self): closed.append(self)
+        def generate_content(self, **kwargs):
+            if self is created[0]: raise httpx.ConnectError('private transport details')
+            return SimpleNamespace(candidates=[SimpleNamespace(content=SimpleNamespace(parts=[
+                SimpleNamespace(text='{"intent":"balance"}', thought=False)]))])
+    monkeypatch.setattr(genai, 'Client', Client)
+    with pytest.raises(ProviderError) as caught:
+        GeminiProvider().extract('balance')
+    assert caught.value.category == 'network_connection_error'
+    assert closed == [created[0]]
+    assert Intent.model_validate_json(GeminiProvider().extract('balance')).intent == 'balance'
+    assert len(created) == 2
+
+
+def test_worker_threads_do_not_share_clients(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier, get_ident
+    monkeypatch.setenv('GEMINI_API_KEY', 'synthetic-key')
+    clients = []
+    barrier = Barrier(2)
+    class Client:
+        def __init__(self, **kwargs):
+            self.owner = get_ident()
+            self.models = self
+            clients.append(self)
+        def close(self): pass
+        def generate_content(self, **kwargs):
+            assert self.owner == get_ident()
+            return SimpleNamespace(candidates=[SimpleNamespace(content=SimpleNamespace(parts=[
+                SimpleNamespace(text='{"intent":"balance"}', thought=False)]))])
+    monkeypatch.setattr(genai, 'Client', Client)
+    def worker():
+        from agent.gemini_provider import _close_thread_client
+        try:
+            barrier.wait(timeout=5)
+            GeminiProvider().extract('first')
+            GeminiProvider().extract('second')
+        finally:
+            _close_thread_client()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(lambda _: worker(), range(2)))
+    assert len(clients) == 2
+    assert clients[0].owner != clients[1].owner
+
+
+def test_diagnostic_reports_elapsed_time_without_raw_response(monkeypatch, capsys):
+    from agent import diagnose
+    times = iter([100.0, 102.5])
+    monkeypatch.setattr(diagnose, 'perf_counter', lambda: next(times))
+    class Successful:
+        def extract(self, message): return '{"intent":"balance"}'
+    monkeypatch.setattr(diagnose, 'GeminiProvider', Successful)
+    assert diagnose.main() == 0
+    output = capsys.readouterr().out
+    assert 'ELAPSED_SECONDS: 2.500' in output
+    assert '{"intent"' not in output
+
+
 def test_sdk_adapter_success(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "test-only-not-a-real-key")
     monkeypatch.delenv("GEMINI_MODEL", raising=False)

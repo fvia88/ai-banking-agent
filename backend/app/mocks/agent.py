@@ -67,6 +67,7 @@ class MockAgentAdapter:
                     proposal_id=f"prop_{uuid.uuid4().hex[:8]}",
                     tool=ToolName.REQUEST_TRANSFER,
                     arguments={
+                        "source_account_id": tool_catalog[0]["context"]["account_ids"][0],
                         "recipient_id": "usr_savings_vault",
                         "amount": "45.00",
                         "currency": "CNY",
@@ -129,6 +130,7 @@ class MockAgentAdapter:
                     proposal_id=f"prop_{uuid.uuid4().hex[:8]}",
                     tool=ToolName.REQUEST_TRANSFER,
                     arguments={
+                        "source_account_id": tool_catalog[0]["context"]["account_ids"][0],
                         "recipient_id": "usr_bob_01",
                         "amount": amt_str,
                         "currency": "CNY",
@@ -159,6 +161,7 @@ class MockAgentAdapter:
                     proposal_id=f"prop_{uuid.uuid4().hex[:8]}",
                     tool=ToolName.REQUEST_TRANSFER,
                     arguments={
+                        "source_account_id": tool_catalog[0]["context"]["account_ids"][0],
                         "recipient_id": "usr_bob_01",
                         "amount": "500.00",
                         "currency": "CNY",

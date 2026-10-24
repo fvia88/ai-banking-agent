@@ -5,7 +5,8 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
-from app.db.models import UserModel, AccountModel, TransactionModel, ActionApprovalModel, AuditLogModel
+from app.db.models import UserModel, AccountModel, TransactionModel, ActionApprovalModel, AuditLogModel, SubscriptionModel
+from app.services.subscriptions import cancellation_record, SubscriptionUnavailable
 
 def execute_transfer(
     db: Session,
@@ -82,13 +83,23 @@ def execute_subscription_cancel(
     user: UserModel,
     record: ActionApprovalModel
 ) -> str:
-    """
-    Simulates cancelling a recurring subscription:
-    1. Validates subscription_id
-    2. Writes to the immutable Audit log
-    """
+    """Persist a simulated cancellation and audit together; never credit savings."""
     payload = json.loads(record.payload_json)
-    subscription_id = payload.get("subscription_id", "unknown_sub")
+    subscription_id = payload["subscription_id"]
+    try:
+        subscription = cancellation_record(db, user.user_id, subscription_id)
+    except SubscriptionUnavailable as exc:
+        raise HTTPException(status_code=409, detail=exc.reason_code) from exc
+    changed = db.query(SubscriptionModel).filter(
+        SubscriptionModel.subscription_id == subscription_id,
+        SubscriptionModel.user_id == user.user_id,
+        SubscriptionModel.account_id == subscription.account_id,
+        SubscriptionModel.status == "active",
+        SubscriptionModel.cancellation_supported.is_(True),
+    ).update({SubscriptionModel.status: "cancelled",
+              SubscriptionModel.cancelled_at: datetime.now(timezone.utc)}, synchronize_session="fetch")
+    if changed != 1:
+        raise HTTPException(status_code=409, detail="Subscription state changed; cancellation was not repeated.")
 
     audit_id = f"aud_{uuid.uuid4().hex[:10]}"
     audit_entry = AuditLogModel(

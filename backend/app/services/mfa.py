@@ -111,7 +111,12 @@ def claim_challenge(db: Session, record: ActionApprovalModel, now: datetime) -> 
     """
     Consume the challenge with a single conditional UPDATE so that only one
     request can ever move on to execution. Returns False if another request
-    already consumed it or the action left PENDING_MFA. Caller commits.
+    already consumed it or the action left PENDING_MFA.
+
+    The caller must commit the claim in the SAME transaction as the execution
+    and the COMPLETED status. The UPDATE holds the row's write lock until that
+    commit, so a racing request waits and then matches zero rows; if execution
+    fails, rolling back releases the claim and no half-finished state remains.
     """
     claimed = db.query(ActionApprovalModel).filter(
         ActionApprovalModel.action_id == record.action_id,
@@ -125,3 +130,35 @@ def claim_challenge(db: Session, record: ActionApprovalModel, now: datetime) -> 
     db.flush()
     db.refresh(record)
     return claimed == 1
+
+
+def is_stranded(record: ActionApprovalModel) -> bool:
+    """
+    Consumed challenge on an action that never completed. Only rows written by
+    the old two-commit flow (claim committed before execution) can look like
+    this; the execution never committed, so no money moved.
+    """
+    return (
+        record.status == ActionStatus.PENDING_MFA.value
+        and record.mfa_consumed_at is not None
+        and record.audit_id is None
+    )
+
+
+def fail_after_rejected_execution(db: Session, record: ActionApprovalModel, now: datetime) -> None:
+    """
+    After an executor refusal (e.g. insufficient funds) has been rolled back,
+    retire the action as FAILED with its challenge consumed so the same code
+    cannot be replayed. Conditional so it never overwrites a concurrent
+    COMPLETED. Caller commits.
+    """
+    db.query(ActionApprovalModel).filter(
+        ActionApprovalModel.action_id == record.action_id,
+        ActionApprovalModel.status == ActionStatus.PENDING_MFA.value,
+    ).update(
+        {
+            ActionApprovalModel.status: ActionStatus.FAILED.value,
+            ActionApprovalModel.mfa_consumed_at: now,
+        },
+        synchronize_session=False,
+    )
