@@ -179,6 +179,14 @@ def verify_action(
         )
 
     if check == mfa.ChallengeCheck.CONSUMED:
+        if mfa.is_stranded(record):
+            # Legacy row from the old two-commit flow: execution never committed.
+            record.status = ActionStatus.FAILED.value
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This verification could not be completed and no money was moved. Please start a new request."
+            )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Verification code already used; this action is being processed."
@@ -223,26 +231,36 @@ def verify_action(
     # TODO(P4): re-run security.policy.evaluate_action against the current
     # BankingContext here once the real policy bridge replaces the mock.
 
-    # Consume the challenge atomically; only one request may execute
+    # Persist any earlier writes (none expected) so the claim transaction below
+    # contains only the claim, the execution and the completion.
+    db.commit()
+
+    # Claim + execute + complete commit together: either all of it lands or none
+    # of it does, so a crash or DB error can never strand a consumed challenge.
     if not mfa.claim_challenge(db, record, now):
-        db.commit()
+        db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Verification code already used; this action is being processed."
         )
-    db.commit()
-
-    # MFA verified -> Execute atomically and complete
     try:
         audit_id, _ = _execute_action(db, user, record)
+        record.status = ActionStatus.COMPLETED.value
+        record.audit_id = audit_id
+        db.commit()
     except HTTPException:
-        # Executors validate before mutating; the consumed challenge cannot be reused.
-        record.status = ActionStatus.FAILED.value
+        # Executor refused (e.g. insufficient funds): undo any partial writes,
+        # then retire the action so the same code cannot be replayed.
+        db.rollback()
+        mfa.fail_after_rejected_execution(db, record, now)
         db.commit()
         raise
-    record.status = ActionStatus.COMPLETED.value
-    record.audit_id = audit_id
-    db.commit()
+    except Exception:
+        # Unexpected failure: nothing was committed, so the challenge is still
+        # unused and the user may retry within the expiry and attempt limits.
+        # If the commit actually landed, a retry hits the COMPLETED replay path.
+        db.rollback()
+        raise
 
     return ExecutionResult(
         action_id=record.action_id,

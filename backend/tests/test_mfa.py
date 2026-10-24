@@ -265,6 +265,74 @@ def test_executor_failure_consumes_challenge_without_retry_debit(client, db_sess
     assert _balance(db_session) == START_BALANCE
 
 
+def test_unexpected_executor_crash_leaves_no_debit_and_code_still_usable(client, db_session, monkeypatch):
+    """A crash mid-execution must not strand the action: nothing commits, the code stays usable."""
+    action_id, _ = _red_action_pending_mfa(client, db_session, "c_mfa_crash")
+    real_execute = approvals.execute_transfer
+
+    def debit_then_crash(db, user, record):
+        real_execute(db, user, record)  # partial writes: balance, ledger, audit
+        raise RuntimeError("simulated DB/process failure after debit")
+
+    monkeypatch.setattr(approvals, "execute_transfer", debit_then_crash)
+    try:
+        _verify(client, action_id)
+        assert False, "expected the simulated failure to propagate"
+    except RuntimeError:
+        pass
+
+    assert _balance(db_session) == START_BALANCE
+    assert _transfer_count(db_session) == 0
+    record = _record(db_session, action_id)
+    assert record.status == ActionStatus.PENDING_MFA.value
+    assert record.mfa_consumed_at is None
+    assert [m["action_id"] for m in client.get("/api/v1/demo/otp-inbox", headers=ALICE).json()] == [action_id]
+
+    # Retry with the same code after the fault clears: exactly one debit
+    monkeypatch.setattr(approvals, "execute_transfer", real_execute)
+    resp = _verify(client, action_id)
+    assert resp.status_code == 200
+    assert resp.json()["status"] == ActionStatus.COMPLETED.value
+    assert _balance(db_session) == START_BALANCE - Decimal("500.00")
+    assert _transfer_count(db_session) == 1
+
+
+def test_executor_refusal_rolls_back_partial_writes(client, db_session, monkeypatch):
+    """An executor that writes and then refuses must leave no ledger/audit residue."""
+    action_id, _ = _red_action_pending_mfa(client, db_session, "c_mfa_partial_refusal")
+    real_execute = approvals.execute_transfer
+
+    def debit_then_refuse(db, user, record):
+        real_execute(db, user, record)
+        raise HTTPException(status_code=400, detail="Refused after partial write")
+
+    monkeypatch.setattr(approvals, "execute_transfer", debit_then_refuse)
+    assert _verify(client, action_id).status_code == 400
+
+    record = _record(db_session, action_id)
+    assert record.status == ActionStatus.FAILED.value
+    assert record.mfa_consumed_at is not None
+    assert _balance(db_session) == START_BALANCE
+    assert _transfer_count(db_session) == 0
+
+
+def test_legacy_stranded_challenge_is_retired_not_stuck(client, db_session):
+    """Rows left by the old two-commit flow (consumed, never completed) resolve to FAILED with no debit."""
+    action_id, _ = _red_action_pending_mfa(client, db_session, "c_mfa_stranded")
+    record = _record(db_session, action_id)
+    record.mfa_consumed_at = mfa.utc_now()
+    db_session.commit()
+
+    resp = _verify(client, action_id)
+    assert resp.status_code == 409
+    assert "no money was moved" in resp.json()["detail"].lower()
+    assert _record(db_session, action_id).status == ActionStatus.FAILED.value
+    assert _balance(db_session) == START_BALANCE
+
+    # Further retries get a definite terminal answer instead of "being processed"
+    again = _verify(client, action_id)
+    assert again.status_code == 400
+    assert "FAILED" in again.json()["detail"]
 
 
 def test_truly_concurrent_verifies_debit_once(tmp_path, monkeypatch):
