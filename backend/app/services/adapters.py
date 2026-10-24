@@ -141,16 +141,14 @@ class AgentAdapterService:
         return p1_process_turn(chat, tool_catalog=tool_catalog, tool_results=tool_results)
 
 class SecurityAdapterService:
-    def __init__(self, use_mock: bool = True):
-        self.use_mock = use_mock
+    def __init__(self, use_mock: bool | None = None):
+        self.use_mock = use_mock if use_mock is not None else os.getenv("USE_MOCK_SECURITY", "false").lower() == "true"
 
     def evaluate(self, proposal: ActionProposal, context: BankingContext) -> PolicyDecision:
         if self.use_mock:
             return MockSecurityAdapter.evaluate_action(proposal, context)
-        # When Person 4's code is merged:
-        # from security.policy import evaluate_action
-        # return evaluate_action(proposal, context)
-        return MockSecurityAdapter.evaluate_action(proposal, context)
+        from security.policy import evaluate_action
+        return evaluate_action(proposal, context)
 
 def calculate_history_periods(period: str, extra_months: int = 3) -> list[str]:
     """
@@ -190,18 +188,24 @@ class FinanceAdapterService:
 
 class SubscriptionsAdapterService:
     """Bridge for Person 5's Subscription Detection engine."""
-    def __init__(self, use_mock: bool = True):
-        self.use_mock = use_mock
+    def __init__(self, use_mock: bool | None = None):
+        self.use_mock = use_mock if use_mock is not None else os.getenv("USE_MOCK_SUBSCRIPTIONS", "false").lower() == "true"
 
     def detect(self, transactions: list[Transaction]) -> SubscriptionReport:
         if self.use_mock:
             return MockSubscriptionsAdapter.detect_subscriptions(transactions)
-        # When Person 5's code is merged:
-        # from subscriptions.detector import detect_subscriptions
-        # return detect_subscriptions(transactions)
-        return MockSubscriptionsAdapter.detect_subscriptions(transactions)
+        from subscriptions.detector import detect_subscriptions
+        return detect_subscriptions(transactions)
+
+    def enrich(self, report, stored, user_id):
+        from subscriptions.mapping import enrich_candidates
+        return enrich_candidates(report, stored, user_id)
+
+    def assess(self, candidate, stored, user_id):
+        from subscriptions.mapping import assess_stored_cancellation
+        return assess_stored_cancellation(candidate, stored, user_id)
 
 agent_service = AgentAdapterService()  # USE_MOCK_AGENT env selects mock (default) or P1's real agent
-policy_service = SecurityAdapterService(use_mock=True)
+policy_service = SecurityAdapterService()
 finance_service = FinanceAdapterService()
-subscriptions_service = SubscriptionsAdapterService(use_mock=True)
+subscriptions_service = SubscriptionsAdapterService()
