@@ -1,0 +1,10 @@
+{
+  "period": "2026-10",
+  "currency": "CNY",
+  "total_spending": "80.00",
+  "category_totals": {
+    "Dining": "35.00",
+    "Entertainment": "45.00"
+  },
+  "anomalies": []
+}
