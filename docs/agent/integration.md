@@ -16,8 +16,32 @@ the agent emits transfer amounts as two-decimal strings.
 The frozen signature leaves catalog/result/history shapes unspecified. It has
 no recipient lookup tool, dependency graph, or conversation-history field.
 The local conventions below support independent development; they do not claim
-to be a newly agreed team contract. Dependent cancellation/savings workflows
-are deferred; compound requests ask for one step at a time in this milestone.
+to be a newly agreed team contract. A bounded cancellation-then-transfer plan is
+supported as described below; other compound requests still require clarification.
+
+## Bounded ordered plan (agent-side)
+
+Example: `Cancel StreamBox then transfer 39 CNY to Bob`. The amount and recipient
+must be explicit; cancellation never creates a refund or adds money to balance.
+The private returned `ConversationState.pending_plan` stores two ordered steps.
+Persist the whole state through the existing caller-owned state mechanism.
+
+Only cancellation is initially proposed. Feed its trusted, correlated execution
+result back to `process_turn` using the existing mutation-result envelope.
+Only `COMPLETED` releases the transfer proposal; pending approval/MFA waits,
+and rejected/failed/cancelled results stop the remaining plan. Each proposal
+still requires separate backend policy checks, approval and execution.
+
+`pause plan` (or `human takeover`) pauses progression; `resume plan` continues.
+`stop plan`/`never mind` discards remaining steps but does not revoke issued
+actions or reverse completed operations. Human review is requested through the
+app team; the agent does not contact a person or perform automatic rollback.
+Repeated messages do not reissue the current proposal. A new banking request
+replaces the unfinished plan while retaining issued proposals for correlation.
+
+This requires the backend to return mutation results to the agent, including
+the new state after each continuation. Agent tests use synthetic results; this
+does not establish that the website already implements the complete loop.
 
 ## Catalog
 
