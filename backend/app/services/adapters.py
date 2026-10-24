@@ -141,16 +141,29 @@ class AgentAdapterService:
         return p1_process_turn(chat, tool_catalog=tool_catalog, tool_results=tool_results)
 
 class SecurityAdapterService:
-    def __init__(self, use_mock: bool = True):
-        self.use_mock = use_mock
+    def __init__(self, use_mock: bool | None = None):
+        # Reads USE_MOCK_SECURITY env var (default: True)
+        if use_mock is not None:
+            if not isinstance(use_mock, bool):
+                raise ValueError(f"Invalid use_mock={use_mock!r}; expected a boolean or None")
+            self.use_mock = use_mock
+        else:
+            raw_mode = os.getenv("USE_MOCK_SECURITY", "true")
+            normalized_mode = raw_mode.lower()
+            if normalized_mode == "true":
+                self.use_mock = True
+            elif normalized_mode == "false":
+                self.use_mock = False
+            else:
+                raise ValueError(
+                    f"Invalid USE_MOCK_SECURITY={raw_mode!r}; expected 'true' or 'false'"
+                )
 
     def evaluate(self, proposal: ActionProposal, context: BankingContext) -> PolicyDecision:
         if self.use_mock:
             return MockSecurityAdapter.evaluate_action(proposal, context)
-        # When Person 4's code is merged:
-        # from security.policy import evaluate_action
-        # return evaluate_action(proposal, context)
-        return MockSecurityAdapter.evaluate_action(proposal, context)
+        from security.policy import evaluate_action
+        return evaluate_action(proposal, context)
 
 def calculate_history_periods(period: str, extra_months: int = 3) -> list[str]:
     """
@@ -202,6 +215,6 @@ class SubscriptionsAdapterService:
         return MockSubscriptionsAdapter.detect_subscriptions(transactions)
 
 agent_service = AgentAdapterService()  # USE_MOCK_AGENT env selects mock (default) or P1's real agent
-policy_service = SecurityAdapterService(use_mock=True)
+policy_service = SecurityAdapterService()
 finance_service = FinanceAdapterService()
 subscriptions_service = SubscriptionsAdapterService(use_mock=True)
