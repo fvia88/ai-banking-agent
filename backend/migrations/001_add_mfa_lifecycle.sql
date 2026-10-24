@@ -1,0 +1,12 @@
+BEGIN;
+
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '30s';
+
+ALTER TABLE public.action_approvals
+    ADD COLUMN IF NOT EXISTS mfa_issued_at TIMESTAMP WITHOUT TIME ZONE,
+    ADD COLUMN IF NOT EXISTS mfa_expires_at TIMESTAMP WITHOUT TIME ZONE,
+    ADD COLUMN IF NOT EXISTS mfa_consumed_at TIMESTAMP WITHOUT TIME ZONE,
+    ADD COLUMN IF NOT EXISTS audit_id VARCHAR(64);
+
+COMMIT;

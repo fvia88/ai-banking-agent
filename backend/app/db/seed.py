@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 from decimal import Decimal
 from app.db.session import SessionLocal, Base, engine
+from app.db.migrate import upgrade_database
 from app.db.models import UserModel, AccountModel, TransactionModel
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -16,7 +17,7 @@ def load_fixture(filename: str):
 
 def seed_database():
     """Initialize an empty demo DB without resetting existing user data."""
-    Base.metadata.create_all(bind=engine)
+    upgrade_database(engine)
     
     db = SessionLocal()
     try:
