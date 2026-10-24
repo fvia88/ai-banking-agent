@@ -26,7 +26,7 @@ POST /verify  correct code ──> COMPLETED                 (exactly one debit 
 | Replay | Verifying a `COMPLETED` action returns the original audit ID and never debits again |
 | Ownership | Actions and the inbox are scoped to the authenticated demo user. Another user gets 404 |
 | Delivery | Simulated: printed to the backend console and shown in the owner's demo inbox (`GET /api/v1/demo/otp-inbox`), labelled "[Simulated]" |
-| Old databases | `app/db/upgrade.py` adds the MFA columns at startup without touching existing data |
+| Old databases | P2's Alembic migration `0002_mfa_lifecycle` adds the MFA columns at startup without touching existing data (see `docs/app/database_migrations.md`) |
 
 ## Demo steps (fresh database, Alice)
 
@@ -78,9 +78,4 @@ Note: this transfer also adds `Transfers 1200.00` to Alice's October spending re
 - `test_legacy_stranded_challenge_is_retired_not_stuck`
 - `test_truly_concurrent_verifies_debit_once` (two real threads, shared file DB)
 
-`backend/tests/test_db_upgrade.py`:
-- fresh DB
-- pre-MFA DB upgraded with data preserved
-- idempotent restarts
-- old pending row cannot execute
-- missing NOT NULL column reported
+Database upgrades (P2): `backend/tests/test_migrations.py`.

@@ -3,8 +3,8 @@ import json
 from pathlib import Path
 from decimal import Decimal
 from app.db.session import SessionLocal, Base, engine
+from app.db.migrate import upgrade_database
 from app.db.models import UserModel, AccountModel, TransactionModel
-from app.db.upgrade import upgrade_schema
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 FIXTURES_DIR = PROJECT_ROOT / "fixtures"
@@ -17,11 +17,8 @@ def load_fixture(filename: str):
 
 def seed_database():
     """Initialize an empty demo DB without resetting existing user data."""
-    Base.metadata.create_all(bind=engine)
-    added = upgrade_schema(engine)
-    if added:
-        print(f"Database schema upgraded; added column(s): {', '.join(added)}")
-
+    upgrade_database(engine)
+    
     db = SessionLocal()
     try:
         if db.query(UserModel.user_id).first() is not None:
