@@ -53,11 +53,35 @@ proposal**. The reply should offer the verified choices instead (stored, active,
 
 ## 4. Alice's backend records (iQIYI)
 
-To fill in after P2 shows the seed data: run the detector on Alice's transactions and the
-stored records, then paste the real output here. Expected meaning only: two iQIYI charges
-give recurrence evidence at low confidence (0.40 when the gaps are monthly). That is a
-"possible recurring charge", not proof of an active subscription. Do not mention any
-merchant that is not in the data (for example Netflix).
+Data: `backend/app/db/seed.py` (account `acc_cny_001`) and the stored record in
+`adapters.py` (`usr_demo_01`). Checked by the `test_alice_*` tests.
+
+Detector input: two debits of 45.00 for "iQIYI VIP Monthly" (`tx_demo_003` on 2026-09-05,
+`tx_demo_002` on 2026-10-05, 30 days apart). The Starbucks debit and the payroll credit
+are not recurring and are not listed.
+
+| Item | Expected |
+|---|---|
+| Candidate id | `sub_iqiyi_vip_monthly` |
+| Amount, cadence | 45.00, monthly |
+| Confidence | 0.40 (only two charges) |
+| Evidence | tx_demo_003, tx_demo_002 |
+| Raw `cancellation_supported` | `false` |
+| Stored record | `sub_iQIYI_01`, user `usr_demo_01`, active, supported |
+
+What this shows:
+
+* The charges are **recurrence evidence at low confidence**, so the listing wording is
+  "possible recurring charge". They do not prove the subscription is active.
+* The candidate id and the stored id **differ**, so mapping works by merchant name (the
+  name is unique for this user). Never assume the ids are equal.
+* Confidence does not decide permission. The stored record is active and supported, so
+  `assess_stored_cancellation` gives `ELIGIBLE` with `stored_subscription_id="sub_iQIYI_01"`.
+  The UI may call it an active subscription because the **stored record** says so.
+* After the stored status becomes `cancelled`: `ALREADY_CANCELLED`, same stored id.
+* Another user id: `SUBSCRIPTION_NOT_FOUND`.
+* Test iQIYI separately from StreamBox and CloudMusic (shared fixtures). Do not mention
+  any merchant that is not in the data (for example Netflix).
 
 ## 5. Rules for P2 when wiring (no change to `backend/` is made by P5)
 

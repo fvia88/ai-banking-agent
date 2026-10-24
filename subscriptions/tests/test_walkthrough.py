@@ -112,3 +112,61 @@ def test_confidence_does_not_decide_the_match_or_the_permission():
     # High confidence with no stored record: never eligible.
     strong = weak.model_copy(update={"confidence": 0.90, "subscription_id": "sub_unknown", "merchant": "Unknown"})
     assert assess_stored_cancellation(strong, stored, USER).reason_code == NOT_FOUND
+
+
+# ---- Alice's backend demo data (copied from backend/app/db/seed.py and adapters.py) ----
+
+def alice():
+    txs = [
+        Transaction(transaction_id="tx_demo_003", account_id="acc_cny_001",
+                    timestamp="2026-09-05T14:15:00+08:00", amount=Decimal("45.00"),
+                    direction="debit", merchant="iQIYI VIP Monthly", category="Entertainment"),
+        Transaction(transaction_id="tx_demo_002", account_id="acc_cny_001",
+                    timestamp="2026-10-05T14:15:00+08:00", amount=Decimal("45.00"),
+                    direction="debit", merchant="iQIYI VIP Monthly", category="Entertainment"),
+        Transaction(transaction_id="tx_demo_001", account_id="acc_cny_001",
+                    timestamp="2026-10-01T09:30:00+08:00", amount=Decimal("35.00"),
+                    direction="debit", merchant="Starbucks Reserve", category="Dining"),
+        Transaction(transaction_id="tx_demo_004", account_id="acc_cny_001",
+                    timestamp="2026-10-10T18:00:00+08:00", amount=Decimal("5000.00"),
+                    direction="credit", merchant="Payroll Inward", category="Income"),
+    ]
+    stored = [Subscription(
+        subscription_id="sub_iQIYI_01", user_id="usr_demo_01", merchant="iQIYI VIP Monthly",
+        estimated_amount=Decimal("45.00"), cadence=Cadence.MONTHLY,
+        status="active", cancellation_supported=True)]
+    return txs, stored
+
+
+def test_alice_iqiyi_is_recurrence_evidence_with_low_confidence():
+    txs, _ = alice()
+    (c,) = detect_subscriptions(txs).candidates
+    assert c.subscription_id == "sub_iqiyi_vip_monthly"
+    assert (c.estimated_amount, c.cadence, c.confidence) == (Decimal("45.00"), Cadence.MONTHLY, 0.40)
+    assert c.evidence_transaction_ids == ["tx_demo_003", "tx_demo_002"]
+    assert c.cancellation_supported is False
+
+
+def test_alice_candidate_id_differs_from_stored_id_but_maps_by_name():
+    txs, stored = alice()
+    (c,) = detect_subscriptions(txs).candidates
+    assert c.subscription_id != stored[0].subscription_id
+    d = assess_stored_cancellation(c, stored, "usr_demo_01")
+    assert (d.eligible, d.reason_code) == (True, "ELIGIBLE")
+    assert d.stored_subscription_id == "sub_iQIYI_01"
+
+
+def test_alice_record_is_not_visible_to_another_user():
+    txs, stored = alice()
+    (c,) = detect_subscriptions(txs).candidates
+    d = assess_stored_cancellation(c, stored, "usr_other")
+    assert (d.eligible, d.reason_code) == (False, NOT_FOUND)
+
+
+def test_alice_cancel_once_then_repeat_is_refused():
+    txs, stored = alice()
+    (c,) = detect_subscriptions(txs).candidates
+    after = cancelled(stored, "sub_iQIYI_01")
+    d = assess_stored_cancellation(c, after, "usr_demo_01")
+    assert (d.eligible, d.reason_code) == (False, ALREADY_CANCELLED)
+    assert d.stored_subscription_id == "sub_iQIYI_01"
