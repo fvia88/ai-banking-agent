@@ -8,11 +8,22 @@ from contracts.models import (ChatInput, AgentResult, ActionProposal, Account,
                               Recipient, Subscription, SubscriptionReport, SpendingReport, ExecutionResult, PositiveMoney)
 from contracts.tool_schemas import validate_tool_arguments
 from .provider import Intent, ProviderError, get_provider
-from .request_guard import is_direct_request, stated_word_amounts, is_new_banking_request
+from .request_guard import (is_direct_request, stated_word_amounts, is_new_banking_request,
+                            is_abandonment, is_generic_cancellation_request)
 from .conversation import (ConversationState, PendingTransfer, PendingSpending,
                            PendingCancellation, ConversationTurn, PendingToolRequest)
+from .planning import maybe_process_plan
 
 logger = logging.getLogger(__name__)
+
+# Exact whole-message shortcuts only. These select a read tool, never an answer;
+# all context/argument validation and trusted-result grounding still run below.
+_EXACT_READ_INTENTS = {
+    'what is my balance': 'balance', "what's my balance": 'balance',
+    'whats my balance': 'balance', 'show my balance': 'balance',
+    'show my subscriptions': 'subscriptions', 'list my subscriptions': 'subscriptions',
+    'list subscriptions': 'subscriptions',
+}
 
 
 @dataclass
@@ -129,17 +140,36 @@ def process_turn(chat: ChatInput, tool_catalog: list[dict],
             if supplied.conversation_id != chat.conversation_id:
                 raise ValueError("Conversation state belongs to a different conversation")
             original = supplied
+        planned = maybe_process_plan(chat, tool_catalog, tool_results or [], original, process_turn)
+        if planned is not None:
+            return planned
         # A standalone abandonment command concerns the local unfinished draft,
         # not approval, execution, or subscription cancellation. Do not swallow
         # an execution result if this call is actually processing tool results.
-        command = chat.message.strip().casefold().rstrip(".!?").strip()
-        if not tool_results and command in {"never mind", "nevermind"}:
+        if not tool_results and is_abandonment(chat.message):
             reply = ("Unfinished request discarded." if any(draft is not None for draft in
                      (original.pending_transfer, original.pending_spending, original.pending_cancellation))
                      else "There is no unfinished request to discard.")
             return ConversationTurn(result=AgentResult(reply=reply),
                                     state=ConversationState(conversation_id=chat.conversation_id,
                                         pending_tool_requests=original.pending_tool_requests))
+        # Standalone social/help messages need no remote interpretation. Match
+        # the whole message only, after state validation, and never intercept a
+        # field answer or a trusted tool-result continuation.
+        if not tool_results and original.awaiting is None:
+            social = " ".join(chat.message.strip().casefold().split()).rstrip('.!?').strip()
+            help_reply = "I can help with balances, spending, subscriptions, transfers, or cancellations. What would you like to do?"
+            reply = None
+            if social in {'hi', 'hello', 'hey', 'hi there', 'hello there', 'hey there',
+                          'good morning', 'good afternoon', 'good evening', 'nihao', '你好'}:
+                reply = "Hello! " + help_reply
+            elif social in {'help', 'what can you do', 'what can you help me with'}:
+                reply = help_reply
+            elif social in {'ok', 'okay', 'oki', 'thanks', 'thank you', 'thankyou', 'ty', 'got it', 'understood'}:
+                reply = ("Acknowledged. This does not confirm or execute any proposed action."
+                         if original.pending_tool_requests else "You're welcome. What would you like help with next?")
+            if reply is not None:
+                return ConversationTurn(result=AgentResult(reply=reply), state=original)
         progress = _Progress(original)
         progress.stage = "request_processing"
         result = _process(chat, tool_catalog, tool_results or [], progress)
@@ -329,10 +359,20 @@ def _process(chat, catalog, results, progress):
             elif re.fullmatch(r"[+-]?\d+(?:\.\d+)?", chat.message.strip()):
                 message = re.sub(r"^(transfer|send)\b", r"\1 " + chat.message, previous, flags=re.I)
     if not continuing and not continuing_spending and not continuing_cancellation:
-        progress.stage = "provider_request"
-        payload = get_provider().extract(message)
-        progress.stage = "intent_validation"
-        extracted = Intent.model_validate_json(payload)
+        exact_message = " ".join(message.strip().casefold().replace("’", "'").split()).rstrip('.!?').strip()
+        local_intent = _EXACT_READ_INTENTS.get(exact_message) if not previous else None
+        if not previous and is_generic_cancellation_request(message):
+            # Never let a model turn this explicit mutation request into a read.
+            # The ordinary cancellation branch below asks for a verified name;
+            # it still checks locks/support and requires backend approval later.
+            extracted = Intent(intent='cancel')
+        elif local_intent is not None:
+            extracted = Intent(intent=local_intent)
+        else:
+            progress.stage = "provider_request"
+            payload = get_provider().extract(message)
+            progress.stage = "intent_validation"
+            extracted = Intent.model_validate_json(payload)
     progress.stage = "proposal_validation"
     mapping = {"balance": "get_balance", "spending": "analyze_spending",
                "subscriptions": "list_subscriptions", "transfer": "request_transfer",

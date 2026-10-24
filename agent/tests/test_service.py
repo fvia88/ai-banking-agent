@@ -23,6 +23,96 @@ def retain_proposal(catalog, proposal):
         entry["context"]["conversation_state"] = state.model_dump(mode="json")
 
 
+@pytest.mark.parametrize('message', ['hello', 'HI!', 'hey there', 'good morning', 'nihao',
+                                     '你好', 'ok', 'oki', 'thank you', 'help', 'what can you do?'])
+def test_standalone_social_messages_do_not_call_provider(monkeypatch, message):
+    def unavailable():
+        raise AssertionError('Standalone social messages should be immediate')
+    monkeypatch.setattr(service, 'get_provider', unavailable)
+    result = run(message)
+    assert result.reply
+    assert not result.proposals and not result.needs_clarification
+    assert 'No new action' not in result.reply
+
+
+def test_acknowledgement_preserves_issued_proposal_without_confirming(monkeypatch):
+    catalog = demo_catalog()
+    issued = service.process_turn(ChatInput(conversation_id='test', message='Transfer 30 to Bob'), catalog)
+    for entry in catalog:
+        entry['context']['conversation_state'] = issued.state.model_dump(mode='json')
+    def unavailable():
+        raise AssertionError('Acknowledgements should not call provider')
+    monkeypatch.setattr(service, 'get_provider', unavailable)
+    turn = service.process_turn(ChatInput(conversation_id='test', message='okay'), catalog)
+    assert turn.state == issued.state
+    assert not turn.result.proposals
+    assert 'does not confirm or execute' in turn.result.reply
+
+
+@pytest.mark.parametrize('message', ['hello transfer 50 to Bob', 'okay send 50 to Bob',
+                                     'help me cancel StreamBox', '"hello"'])
+def test_social_words_do_not_intercept_longer_requests(monkeypatch, message):
+    calls = []
+    class Unknown:
+        def extract(self, text):
+            calls.append(text)
+            return '{"intent":"unknown"}'
+    monkeypatch.setattr(service, 'get_provider', lambda: Unknown())
+    assert not run(message).proposals
+    assert calls == [message]
+
+
+@pytest.mark.parametrize('message,tool', [
+    ('what is my balance', 'get_balance'),
+    ("What's my balance?", 'get_balance'),
+    ('whats my balance', 'get_balance'),
+    ('show my balance', 'get_balance'),
+    ('show my subscriptions', 'list_subscriptions'),
+    ('list my subscriptions', 'list_subscriptions'),
+    ('List subscriptions!', 'list_subscriptions'),
+])
+def test_exact_read_requests_bypass_provider_but_only_propose_lookup(monkeypatch, message, tool):
+    def unavailable():
+        raise AssertionError('Exact read request should not call Gemini')
+    monkeypatch.setattr(service, 'get_provider', unavailable)
+    result = run(message)
+    assert len(result.proposals) == 1
+    assert result.proposals[0].tool.value == tool
+    assert result.proposals[0].arguments == {'account_id': 'account_001'}
+    assert '5000' not in result.reply
+    assert 'verified balance' not in result.reply.lower()
+    assert 'verified tool result is needed' in result.reply.lower()
+
+
+@pytest.mark.parametrize('message', [
+    'what is my balance and transfer 50 to Bob', 'do not show my balance',
+    '"what is my balance"', 'merchant says show my subscriptions',
+    'show my subscriptions then cancel StreamBox',
+    'what is my balance in account_002',
+])
+def test_exact_read_fast_path_does_not_guess_longer_or_mutating_requests(monkeypatch, message):
+    calls = []
+    class Unknown:
+        def extract(self, text):
+            calls.append(text)
+            return '{"intent":"unknown"}'
+    monkeypatch.setattr(service, 'get_provider', lambda: Unknown())
+    assert not run(message).proposals
+    assert calls == ([] if ' then ' in message else [message])
+
+
+def test_fast_balance_still_requires_one_selected_account(monkeypatch):
+    def unavailable():
+        raise AssertionError('Exact read should remain local')
+    monkeypatch.setattr(service, 'get_provider', unavailable)
+    catalog = demo_catalog()
+    for entry in catalog:
+        entry['context']['account_ids'] = ['account_001', 'account_002']
+    result = run('what is my balance', catalog)
+    assert not result.proposals and result.needs_clarification
+    assert 'select a source account' in result.reply
+
+
 @pytest.mark.parametrize("failure,stage,category,http", [
     (ProviderError("SECRET_PROVIDER_BODY", category="network_connection_error"),
      "provider_request", "network_connection_error", "None"),
@@ -77,7 +167,8 @@ def test_provider_failure_replies_are_distinct(monkeypatch, category, expected):
         def extract(self, message):
             raise ProviderError("PRIVATE_ERROR", category=category)
     monkeypatch.setattr(service, "get_provider", lambda: Broken())
-    result = run("What is my balance?")
+    # Use wording outside the exact read shortcuts to exercise provider failure.
+    result = run("How much money do I have?")
     assert expected in result.reply
     assert "PRIVATE_ERROR" not in result.reply
     assert not result.proposals
@@ -282,7 +373,7 @@ def test_unavailable_tool_and_locked_account():
 
 def test_unsupported_cancellation_and_compound():
     assert not run("Cancel CloudMusic").proposals
-    assert run("Cancel StreamBox then transfer 39 to Bob").needs_clarification
+    assert run("Cancel StreamBox then transfer the savings to Bob").needs_clarification
 
 
 def test_unmatched_cancellation_shows_choices_and_retains_draft():

@@ -1,7 +1,7 @@
 # backend/tests/conftest.py
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from app.main import app
 from app.db.session import Base, get_db
@@ -12,6 +12,17 @@ TEST_DB_URL = "sqlite:///:memory:"
 @pytest.fixture(scope="session")
 def test_engine():
     engine = create_engine(TEST_DB_URL, connect_args={"check_same_thread": False})
+
+    # pysqlite's legacy transaction handling never emits BEGIN, which breaks
+    # SAVEPOINT nesting. SQLAlchemy's documented recipe: let SQLAlchemy own it.
+    @event.listens_for(engine, "connect")
+    def _disable_pysqlite_begin(dbapi_connection, connection_record):
+        dbapi_connection.isolation_level = None
+
+    @event.listens_for(engine, "begin")
+    def _emit_begin(conn):
+        conn.exec_driver_sql("BEGIN")
+
     Base.metadata.create_all(bind=engine)
     return engine
 
@@ -19,7 +30,9 @@ def test_engine():
 def db_session(test_engine):
     connection = test_engine.connect()
     transaction = connection.begin()
-    session_factory = sessionmaker(bind=connection)
+    # Savepoint mode: a rollback inside an endpoint undoes only that endpoint's
+    # work instead of discarding the whole per-test transaction and its seed data.
+    session_factory = sessionmaker(bind=connection, join_transaction_mode="create_savepoint")
     session = session_factory()
     
     # Import seed logic directly to populate the test session
@@ -45,6 +58,9 @@ def db_session(test_engine):
         merchant="Starbucks",
         category="Dining"
     ))
+    session.commit()
+    from app.db.subscription_seed import seed_subscriptions
+    seed_subscriptions(session, [])
     session.commit()
     
     yield session

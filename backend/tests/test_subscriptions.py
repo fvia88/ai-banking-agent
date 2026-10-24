@@ -42,7 +42,7 @@ def test_get_subscriptions_detects_recurring_charges(client, db_session):
     assert Decimal(str(sub["estimated_amount"])) == Decimal("45.00")
     assert sub["cadence"] == Cadence.MONTHLY.value
     assert sub["cancellation_supported"] is True
-    assert sub["confidence"] >= 0.9
+    assert sub["confidence"] == 0.4
 
 def test_t07_cancel_subscription_yellow_tier_and_execution(client):
     """

@@ -265,7 +265,8 @@ def test_failed_new_request_retains_previous_draft(monkeypatch):
         def extract(self, message):
             raise ProviderError("offline", category="network_connection_error")
     monkeypatch.setattr(service, "get_provider", lambda: Broken())
-    turn = service.process_turn(ChatInput(conversation_id="c1", message="What is my balance?"), catalog)
+    # A clear task switch outside the exact local read shortcuts.
+    turn = service.process_turn(ChatInput(conversation_id="c1", message="Check my balance"), catalog)
     assert turn.state == state
     assert not turn.result.proposals
 
@@ -278,3 +279,52 @@ def test_quoted_or_hypothetical_text_does_not_replace_draft(monkeypatch, message
     turn = service.process_turn(ChatInput(conversation_id="c1", message=message), catalog)
     assert turn.state == state
     assert not turn.result.proposals
+
+
+@pytest.mark.parametrize('command', ['nvr mind', 'nvm', 'never midn', 'nevermimd', 'NVR MIND!'])
+def test_common_abandonment_variants_are_local_and_preserve_issued_requests(monkeypatch, command):
+    monkeypatch.setenv('AGENT_PROVIDER', 'mock')
+    catalog = demo_catalog()
+    issued = service.process_turn(ChatInput(conversation_id='c1', message='Transfer 40 to Bob'), catalog)
+    supply(catalog, issued.state)
+    draft = service.process_turn(ChatInput(conversation_id='c1', message='Transfer to Alice'), catalog)
+    supply(catalog, draft.state)
+    def unavailable():
+        raise AssertionError('Abandoning a draft must not need the provider')
+    monkeypatch.setattr(service, 'get_provider', unavailable)
+    turn = service.process_turn(ChatInput(conversation_id='c1', message=command), catalog)
+    assert turn.result.reply == 'Unfinished request discarded.'
+    assert not turn.result.proposals
+    assert turn.state.pending_transfer is None
+    assert turn.state.pending_tool_requests == issued.state.pending_tool_requests
+
+
+@pytest.mark.parametrize('command', ['nvr mind if Bob asks', '"nvm"', 'nvm send 900 to Bob'])
+def test_abandonment_variants_require_standalone_command(monkeypatch, command):
+    catalog, state = initial(monkeypatch)
+    supply(catalog, state)
+    turn = service.process_turn(ChatInput(conversation_id='c1', message=command), catalog)
+    assert turn.state == state and not turn.result.proposals
+
+
+def test_social_words_do_not_clear_or_replace_an_unfinished_draft(monkeypatch):
+    catalog, state = initial(monkeypatch)
+    supply(catalog, state)
+    def unavailable():
+        raise AssertionError('A field answer must still be handled locally')
+    monkeypatch.setattr(service, 'get_provider', unavailable)
+    for message in ['hello', 'okay', 'help']:
+        turn = service.process_turn(ChatInput(conversation_id='c1', message=message), catalog)
+        assert turn.state == state
+        assert turn.result.needs_clarification and not turn.result.proposals
+
+
+def test_verified_subscription_named_like_a_greeting_is_still_a_field_answer(monkeypatch):
+    monkeypatch.setenv('AGENT_PROVIDER', 'mock')
+    catalog = demo_catalog()
+    for entry in catalog:
+        entry['context']['subscriptions'][0]['merchant'] = 'Hello'
+    draft = service.process_turn(ChatInput(conversation_id='c1', message='Cancel my subscription'), catalog)
+    supply(catalog, draft.state)
+    turn = service.process_turn(ChatInput(conversation_id='c1', message='hello'), catalog)
+    assert turn.result.proposals[0].arguments == {'subscription_id': 'sub_streambox'}
