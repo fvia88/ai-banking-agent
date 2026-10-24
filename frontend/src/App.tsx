@@ -1,13 +1,15 @@
 // frontend/src/App.tsx
 import { useState, useEffect } from 'react';
-import { fetchAccounts, fetchTransactions, sendChatMessage, confirmAction, verifyAction, fetchSubscriptions, fetchAuditLogs, fetchDemoInbox } from './api';
-import type { Account, Transaction, ChatMessage, SubscriptionCandidate, AuditEvent, DemoInboxMessage } from './api';
+import { fetchAccounts, fetchTransactions, sendChatMessage, confirmAction, verifyAction, fetchSubscriptions, fetchStoredSubscriptions, fetchAuditLogs, fetchDemoInbox } from './api';
+import type { Account, Transaction, ChatMessage, SubscriptionCandidate, StoredSubscription, AuditEvent, DemoInboxMessage } from './api';
+import { SubscriptionsPanel } from './SubscriptionsPanel';
 
 export default function App() {
   // Banking data state
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [subscriptions, setSubscriptions] = useState<SubscriptionCandidate[]>([]);
+  const [storedSubscriptions, setStoredSubscriptions] = useState<StoredSubscription[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditEvent[]>([]);
   const [showAudit, setShowAudit] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
@@ -30,15 +32,17 @@ export default function App() {
     setLoading(true);
     setError(null);
     try {
-      const [accRes, txRes, subRes, audRes] = await Promise.all([
+      const [accRes, txRes, subRes, audRes, storedRes] = await Promise.all([
         fetchAccounts(),
         fetchTransactions(),
         fetchSubscriptions(),
-        fetchAuditLogs()
+        fetchAuditLogs(),
+        fetchStoredSubscriptions(),
       ]);
       setAccounts(accRes.accounts);
       setTransactions(txRes.transactions);
       setSubscriptions(subRes.candidates);
+      setStoredSubscriptions(storedRes);
       setAuditLogs(audRes.events);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Error connecting to backend');
@@ -381,52 +385,12 @@ export default function App() {
         </table>
       </section>
 
-      {/* --- 1. RECURRING SUBSCRIPTIONS PANEL --- */}
-      <section style={{ marginBottom: '24px', borderTop: '2px solid #ccc', paddingTop: '16px' }}>
-        <h3>🔄 Detected Recurring Subscriptions</h3>
-        {subscriptions.length === 0 ? (
-          <p style={{ color: '#666' }}>No active recurring subscriptions detected.</p>
-        ) : (
-          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
-            {subscriptions.map((sub) => (
-              <div
-                key={sub.subscription_id}
-                style={{
-                  border: '1px solid #ff9800',
-                  borderRadius: '6px',
-                  padding: '12px',
-                  background: '#fff8e1',
-                  minWidth: '220px',
-                }}
-              >
-                <strong>{sub.merchant}</strong>
-                <div style={{ fontSize: '18px', fontWeight: 'bold', color: '#e65100', margin: '4px 0' }}>
-                  {sub.estimated_amount} CNY / {sub.cadence}
-                </div>
-                <small style={{ color: '#666' }}>Confidence: {(sub.confidence * 100).toFixed(0)}%</small>
-                <div style={{ marginTop: '8px' }}>
-                  <button
-                    onClick={() => {
-                      setInputMessage(`Cancel my ${sub.merchant} subscription`);
-                    }}
-                    style={{
-                      padding: '4px 8px',
-                      background: '#ff9800',
-                      color: '#fff', 
-                      border: 'none',
-                      borderRadius: '4px',
-                      cursor: 'pointer',
-                      fontSize: '12px',
-                    }}
-                  >
-                    ⚡ Cancel via AI
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
+      <SubscriptionsPanel
+        candidates={subscriptions}
+        records={storedSubscriptions}
+        accountId={accounts.map((account) => account.account_id).sort()[0]}
+        onRequestCancellation={setInputMessage}
+      />
 
       {/* --- 2. AUDIT TRAIL LOG VIEWER --- */}
       <section style={{ borderTop: '2px solid #ccc', paddingTop: '16px' }}>

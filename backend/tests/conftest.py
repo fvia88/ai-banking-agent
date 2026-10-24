@@ -59,6 +59,9 @@ def db_session(test_engine):
         category="Dining"
     ))
     session.commit()
+    from app.db.subscription_seed import seed_subscriptions
+    seed_subscriptions(session, [])
+    session.commit()
     
     yield session
     

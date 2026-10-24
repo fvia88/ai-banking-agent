@@ -1,17 +1,92 @@
 # backend/app/api/approvals.py
 import uuid
+import json
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from contracts.enums import ActionStatus, Tier, ToolName
-from contracts.models import ExecutionResult
+from contracts.models import ExecutionResult, ActionProposal, BankingContext
+from contracts.tool_schemas import validate_tool_arguments
 from app.api.deps import get_current_user
 from app.db.session import get_db
-from app.db.models import UserModel, ActionApprovalModel, AuditLogModel
+from app.db.models import UserModel, AccountModel, ActionApprovalModel, AuditLogModel
 from app.services.executor import execute_transfer, execute_subscription_cancel
 from app.services import mfa
+from app.services.adapters import policy_service
+from app.services.actions import compute_action_digest
+from app.services.subscriptions import cancellation_record, SubscriptionUnavailable
 
 router = APIRouter()
+
+
+def _current_policy(db: Session, user: UserModel, record: ActionApprovalModel):
+    """Revalidate stored canonical arguments and build context from current owned DB rows.
+
+    This check is required at both confirm and verify; it is not a replacement
+    for account/action serialization against concurrent requests.
+    """
+    reason = None
+    try:
+        tool = ToolName(record.tool)
+        if tool not in (ToolName.REQUEST_TRANSFER, ToolName.REQUEST_SUBSCRIPTION_CANCEL):
+            raise ValueError("Unsupported action tool")
+        payload = json.loads(record.payload_json)
+        arguments = validate_tool_arguments(tool, payload)
+        if compute_action_digest(record.tool, payload) != record.action_digest:
+            raise ValueError("Stored payload digest mismatch")
+    except (ValueError, TypeError, KeyError):
+        reason = "INVALID_STORED_ACTION"
+    if reason is None:
+        db.refresh(user)
+        query = db.query(AccountModel).filter(AccountModel.user_id == user.user_id)
+        if tool == ToolName.REQUEST_TRANSFER:
+            query = query.filter(AccountModel.account_id == arguments.source_account_id)
+        else:
+            try:
+                subscription = cancellation_record(db, user.user_id, arguments.subscription_id)
+                query = query.filter(AccountModel.account_id == subscription.account_id)
+            except SubscriptionUnavailable as exc:
+                reason = exc.reason_code
+        account = query.populate_existing().first()
+        if account is None:
+            reason = "SOURCE_ACCOUNT_MISMATCH"
+        elif reason is None:
+            context = BankingContext(
+                user_id=user.user_id, account_id=account.account_id,
+                daily_transfer_total=account.daily_transfer_total,
+                account_balance=account.balance, account_locked=user.is_locked,
+            )
+            proposal = ActionProposal(
+                proposal_id=record.proposal_id or record.action_id, tool=tool,
+                arguments=arguments.model_dump(mode="json"),
+            )
+            decision = policy_service.evaluate(proposal, context)
+            if not decision.allowed_to_proceed:
+                reason = decision.reason_code
+            elif not decision.requires_confirmation or decision.tier not in (Tier.YELLOW, Tier.RED):
+                reason = "INVALID_MUTATION_POLICY"
+    if reason is not None:
+        changed = db.query(ActionApprovalModel).filter(
+            ActionApprovalModel.action_id == record.action_id,
+            ActionApprovalModel.user_id == user.user_id,
+            ActionApprovalModel.status.in_([
+                ActionStatus.PENDING_CONFIRMATION.value, ActionStatus.PENDING_MFA.value,
+            ]),
+        ).update({ActionApprovalModel.status: ActionStatus.REJECTED.value}, synchronize_session="fetch")
+        if changed != 1:
+            # Another request may already have completed this action. Never
+            # overwrite a terminal result using a stale validation snapshot.
+            db.commit()
+            raise HTTPException(status_code=409, detail="Action state changed; refresh before retrying.")
+        db.add(AuditLogModel(
+            audit_id=f"aud_{uuid.uuid4().hex[:10]}", action_id=record.action_id,
+            user_id=user.user_id, action_type="ACTION_POLICY_REJECTED",
+            payload_digest=record.action_digest, reason_code=reason,
+            details="Action rejected during execution-time validation.",
+        ))
+        db.commit()
+        raise HTTPException(status_code=403, detail=f"Action blocked by security policy: {reason}")
+    return decision
 
 def _execute_action(db: Session, user: UserModel, record: ActionApprovalModel) -> tuple[str, str]:
     """Whitelisted dispatch: only known mutation tools reach an executor. Unknown tools fail closed."""
@@ -86,8 +161,11 @@ def confirm_action(
             detail="Action proposal has expired"
         )
 
-    # RED Tier: Issue MFA challenge (P3 lifecycle in app/services/mfa.py)
-    if record.tier == Tier.RED.value:
+    decision = _current_policy(db, user, record)
+    # A stale Yellow proposal can become Red after another completed transfer.
+    # Never downgrade a previously approved Red requirement.
+    if record.tier == Tier.RED.value or decision.requires_mfa or decision.tier == Tier.RED:
+        record.tier = Tier.RED.value
         mfa.issue_challenge(record, now)
         audit_id = f"aud_{uuid.uuid4().hex[:10]}"
         db.add(AuditLogModel(
@@ -220,16 +298,8 @@ def verify_action(
             detail=f"Invalid verification code. {remaining_attempts} attempt(s) remaining."
         )
 
-    # Execution-time controls: a correct code cannot override a newly locked account
-    if user.is_locked:
-        record.status = ActionStatus.REJECTED.value
-        db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Account is locked. Mutations are blocked."
-        )
-    # TODO(P4): re-run security.policy.evaluate_action against the current
-    # BankingContext here once the real policy bridge replaces the mock.
+    # A correct OTP cannot override a new lock or a changed policy decision.
+    _current_policy(db, user, record)
 
     # Persist any earlier writes (none expected) so the claim transaction below
     # contains only the claim, the execution and the completion.

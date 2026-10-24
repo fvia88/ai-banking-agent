@@ -9,7 +9,7 @@ from app.db.session import get_db
 from app.db.models import UserModel, AccountModel, TransactionModel
 from app.services.adapters import agent_service, finance_service, subscriptions_service, build_tool_catalog
 from app.config import settings
-from app.services.actions import create_action_record
+from app.services.actions import create_action_record, PolicyRejected
 from app.services.session_store import (
     get_conversation_state,
     set_conversation_state,
@@ -19,6 +19,9 @@ from app.services.session_store import (
 )
 from decimal import Decimal
 from contracts.models import Account, Transaction
+from contracts.tool_schemas import validate_tool_arguments
+from app.services.adapters import policy_service
+from app.services.subscriptions import selected_account, stored_records, subscription_report, cancellation_record
 
 router = APIRouter()
 
@@ -53,24 +56,19 @@ def _handle_chat_turn(chat_input: ChatInput, user: UserModel, db: Session, state
   clarification_req = saved_state.get("clarification_request")
 
   # 3. Fetch primary account
-  user_accounts = (
-      db.query(AccountModel).filter(AccountModel.user_id == user.user_id).all()
-  )
-  primary_acc = user_accounts[0] if user_accounts else None
+  primary_acc = selected_account(db, user.user_id)
   account_id = primary_acc.account_id if primary_acc else None
 
   # 4. Generate proposal with conversation context
   if real_agent:
-    # The current DB has no recipient/subscription tables. Keep P2's explicit
-    # synthetic demo records only for the configured demo user; never supply
-    # those records to other users or promote detector candidates to active.
+    # Recipients remain demo context; subscriptions come from owned DB records.
     demo_context = (build_tool_catalog()[0]["context"]
                     if user.user_id == settings.DEFAULT_DEMO_USER_ID else {})
     agent_context = dict(
         account_id=account_id,
         account_locked=user.is_locked,
         recipients=[r for r in demo_context.get("recipients", []) if r["user_id"] == user.user_id],
-        subscriptions=[s for s in demo_context.get("subscriptions", []) if s["user_id"] == user.user_id],
+        subscriptions=[s.model_dump(mode="json") for s in stored_records(db, user.user_id, account_id)],
     )
     turn = agent_service.process_turn(
         chat_input, conversation_state=saved_state or None, **agent_context,
@@ -81,6 +79,7 @@ def _handle_chat_turn(chat_input: ChatInput, user: UserModel, db: Session, state
     result = agent_service.process(
         chat_input, account_id=account_id, account_locked=user.is_locked,
         clarification_request=clarification_req,
+        subscriptions=[s.model_dump(mode="json") for s in stored_records(db, user.user_id, account_id)],
     )
 
   # 5. Manage Conversation Memory
@@ -109,6 +108,25 @@ def _handle_chat_turn(chat_input: ChatInput, user: UserModel, db: Session, state
 
   if len(result.proposals) == 1 and result.proposals[0].tool.value in READ_TOOLS:
         proposal = result.proposals[0]
+        if primary_acc is None:
+            return ChatOutput(conversation_id=chat_input.conversation_id,
+                              reply="No owned account is available.", actions=[], status=ActionStatus.REJECTED)
+        try:
+            validate_tool_arguments(proposal.tool, proposal.arguments)
+            read_context = BankingContext(
+                user_id=user.user_id, account_id=account_id,
+                account_balance=primary_acc.balance,
+                daily_transfer_total=primary_acc.daily_transfer_total,
+                account_locked=user.is_locked,
+            )
+            decision = policy_service.evaluate(proposal, read_context)
+            if not decision.allowed_to_proceed or decision.requires_confirmation or decision.requires_mfa:
+                raise PolicyRejected(decision.reason_code)
+        except ValueError as exc:
+            reason = exc.reason_code if isinstance(exc, PolicyRejected) else "INVALID_TOOL_ARGUMENTS"
+            return ChatOutput(conversation_id=chat_input.conversation_id,
+                              reply=f"Read blocked by security policy: {reason}",
+                              actions=[], status=ActionStatus.REJECTED)
         tool_name = proposal.tool.value
         tool_data = {}
 
@@ -149,24 +167,7 @@ def _handle_chat_turn(chat_input: ChatInput, user: UserModel, db: Session, state
             tool_data = report.model_dump(mode="json")
 
         elif tool_name == ToolName.LIST_SUBSCRIPTIONS.value:
-            tx_records = (
-                db.query(TransactionModel)
-                .filter(TransactionModel.account_id == account_id)
-                .all()
-            )
-            parsed_txs = [
-                Transaction(
-                    transaction_id=t.transaction_id,
-                    account_id=t.account_id,
-                    timestamp=datetime.fromisoformat(t.timestamp),
-                    amount=Decimal(str(t.amount)),
-                    direction=Direction(t.direction.lower()),
-                    merchant=t.merchant,
-                    category=t.category,
-                )
-                for t in tx_records
-            ]
-            sub_report = subscriptions_service.detect(parsed_txs)
+            sub_report = subscription_report(db, user.user_id, account_id)
             tool_data = sub_report.model_dump(mode="json")
 
         # Hop 2: Feed verified tool result back to the Agent
@@ -201,7 +202,11 @@ def _handle_chat_turn(chat_input: ChatInput, user: UserModel, db: Session, state
 
   # 7. Otherwise: Mutation Action Proposals (Transfers & Cancellations)
   has_pending_actions = False
+  pending_records = []
   if result.proposals:
+      if primary_acc is None:
+          return ChatOutput(conversation_id=chat_input.conversation_id,
+                            reply="No owned account is available.", actions=[], status=ActionStatus.REJECTED)
       balance_str = f"{primary_acc.balance:.2f}" if primary_acc else "0.00"
       daily_total_str = f"{primary_acc.daily_transfer_total:.2f}" if primary_acc else "0.00"
 
@@ -215,6 +220,9 @@ def _handle_chat_turn(chat_input: ChatInput, user: UserModel, db: Session, state
 
       for proposal in result.proposals:
           try:
+              if proposal.tool == ToolName.REQUEST_SUBSCRIPTION_CANCEL:
+                  args = validate_tool_arguments(proposal.tool, proposal.arguments)
+                  cancellation_record(db, user.user_id, args.subscription_id, account_id)
               action_record, digest, tier = create_action_record(
                   user_id=user.user_id,
                   proposal=proposal,
@@ -223,7 +231,7 @@ def _handle_chat_turn(chat_input: ChatInput, user: UserModel, db: Session, state
               )
 
               if tier in ["YELLOW", "RED"]:
-                  db.add(action_record)
+                  pending_records.append(action_record)
                   proposal.arguments["action_id"] = action_record.action_id
                   proposal.arguments["action_digest"] = digest
                   proposal.arguments["tier"] = tier
@@ -232,13 +240,25 @@ def _handle_chat_turn(chat_input: ChatInput, user: UserModel, db: Session, state
                   proposal.arguments["tier"] = "GREEN"
 
           except ValueError as e:
+              reason = getattr(e, "reason_code", "INVALID_TOOL_ARGUMENTS")
+              explanation = {
+                  "ACCOUNT_LOCKED": "Your account is currently locked for state-changing operations.",
+                  "SOURCE_ACCOUNT_MISMATCH": "The source account does not match your selected account.",
+                  "ACCOUNT_MISMATCH": "The account does not match your authenticated context.",
+                  "INVALID_TOOL_ARGUMENTS": "The proposed action contains invalid or unexpected fields.",
+                  "SUBSCRIPTION_NOT_FOUND": "No verified subscription was found for this account.",
+                  "ALREADY_CANCELLED": "This subscription has already been cancelled.",
+                  "CANCELLATION_NOT_SUPPORTED": "Cancellation is not supported for this subscription.",
+                  "AMBIGUOUS_SUBSCRIPTION": "More than one subscription matches; please clarify.",
+              }.get(reason, "The action did not pass the security policy.")
               return ChatOutput(
                   conversation_id=chat_input.conversation_id,
-                  reply="Action blocked: Your account is currently locked for state-changing operations.",
+                  reply=f"Action blocked ({reason}): {explanation}",
                   actions=[],
                   status=ActionStatus.REJECTED,
               )
 
+      db.add_all(pending_records)
       db.commit()
       status = ActionStatus.PENDING_CONFIRMATION if has_pending_actions else ActionStatus.COMPLETED
   else:

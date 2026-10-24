@@ -151,7 +151,26 @@ export interface SubscriptionCandidate {
   estimated_amount: string | number;
   cadence: string;
   confidence: number;
+  evidence_transaction_ids: string[];
   cancellation_supported: boolean;
+}
+
+export interface StoredSubscription {
+  subscription_id: string;
+  user_id: string;
+  merchant: string;
+  estimated_amount: string;
+  cadence: string;
+  status: 'active' | 'cancelled';
+  cancellation_supported: boolean;
+}
+
+export async function fetchStoredSubscriptions(): Promise<StoredSubscription[]> {
+  const res = await fetch('/api/v1/subscriptions/records', {
+    headers: { 'X-Demo-User-Id': DEMO_USER_ID },
+  });
+  if (!res.ok) throw new Error(`Failed to fetch verified subscriptions: ${res.statusText}`);
+  return res.json();
 }
 
 export interface SubscriptionReport {

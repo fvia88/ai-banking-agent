@@ -44,6 +44,10 @@ missing required baseline columns rather than silently marking them current.
 and audit_id columns. Compatible columns already added by the manual SQL repair
 are accepted. Alembic records the applied revision in `alembic_version`.
 
+`0003_subscriptions` adds durable verified subscription records. Startup backfills
+missing known records only for existing owned demo/fixture accounts, preserving
+cancelled state and financial data. See `p5_integration.md` for scope and APIs.
+
 The older `001_add_mfa_lifecycle.sql` is retained as a manual repair reference;
 automatic startup uses the Python revisions, not that SQL file. No manual stamp
 or database reset is required for the supported existing schemas.
@@ -52,7 +56,8 @@ Old actions retain their statuses and NULL lifecycle values. Do not invent MFA
 timestamps or reset completed actions. Start a new request for an old pending
 MFA action without lifecycle timestamps. Missing historical audit linkage is not
 backfilled. Existing seed behavior preserves nonempty databases and does not
-insert missing fixture records into them.
+insert missing fixture users, accounts or transactions into them. Known missing
+subscription records are backfilled as described above.
 
 ## Safety and future changes
 

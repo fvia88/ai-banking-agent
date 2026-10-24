@@ -79,7 +79,7 @@ def test_upgrade_preserves_data_and_repeats(migration_engine, schema):
     upgrade_database(engine)
     assert snapshot(engine) == before
     with engine.connect() as connection:
-        assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "0002_mfa_lifecycle"
+        assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "0003_subscriptions"
         assert connection.execute(sa.text("SELECT status, mfa_issued_at, mfa_expires_at, mfa_consumed_at, audit_id FROM action_approvals")).one() == ("COMPLETED", None, None, None, None)
     # Full ORM select previously failed when even one mapped column was absent.
     with sa.orm.Session(engine) as session:
@@ -118,3 +118,44 @@ def test_startup_failure_does_not_start_server(monkeypatch):
     with pytest.raises(RuntimeError, match="migration failed"):
         startup.main()
     assert calls == []
+
+
+def test_previous_head_upgrade_and_restart_preserve_subscription_state(migration_engine, monkeypatch):
+    from sqlalchemy.orm import sessionmaker
+    from app.db import seed
+    from app.db.models import AccountModel, SubscriptionModel, UserModel
+    from decimal import Decimal
+    run_to(migration_engine, "0002_mfa_lifecycle")
+    sessions = sessionmaker(bind=migration_engine)
+    with sessions() as db:
+        db.add(UserModel(user_id="usr_demo_01", username="Alice", is_locked=False))
+        db.add(AccountModel(account_id="acc_cny_001", user_id="usr_demo_01", account_number="preserve",
+                            balance=Decimal("987.65"), daily_transfer_total=Decimal("123.00")))
+        db.commit()
+    monkeypatch.setattr(seed, "engine", migration_engine)
+    monkeypatch.setattr(seed, "SessionLocal", sessions)
+    seed.seed_database()
+    with sessions() as db:
+        row = db.get(SubscriptionModel, "sub_iQIYI_01")
+        assert row.status == "active"
+        row.status = "cancelled"
+        db.commit()
+    seed.seed_database()  # Same path as a backend restart, using new sessions.
+    with sessions() as db:
+        assert db.get(SubscriptionModel, "sub_iQIYI_01").status == "cancelled"
+        account = db.get(AccountModel, "acc_cny_001")
+        assert account.balance == Decimal("987.65") and account.daily_transfer_total == Decimal("123.00")
+
+
+def test_fresh_startup_seeds_owned_subscription_records(migration_engine, monkeypatch):
+    from sqlalchemy.orm import sessionmaker
+    from app.db import seed
+    from app.db.models import SubscriptionModel
+    sessions = sessionmaker(bind=migration_engine)
+    monkeypatch.setattr(seed, "engine", migration_engine)
+    monkeypatch.setattr(seed, "SessionLocal", sessions)
+    seed.seed_database()
+    with sessions() as db:
+        assert db.get(SubscriptionModel, "sub_streambox").account_id == "account_001"
+        assert db.get(SubscriptionModel, "sub_cloudmusic").cancellation_supported is False
+        assert db.get(SubscriptionModel, "sub_iQIYI_01").account_id == "acc_cny_001"

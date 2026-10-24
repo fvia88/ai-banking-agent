@@ -243,8 +243,8 @@ def test_unknown_tool_fails_closed_at_verify(client, db_session):
     db_session.commit()
 
     resp = _verify(client, action_id)
-    assert resp.status_code == 400
-    assert _record(db_session, action_id).status == ActionStatus.FAILED.value
+    assert resp.status_code == 403
+    assert _record(db_session, action_id).status == ActionStatus.REJECTED.value
     assert _balance(db_session) == START_BALANCE
 
 
@@ -362,6 +362,8 @@ def test_truly_concurrent_verifies_debit_once(tmp_path, monkeypatch):
     )
     mfa.issue_challenge(record, now)
     issued_code = record.verification_code
+    from app.services.actions import compute_action_digest
+    record.action_digest = compute_action_digest(record.tool, json.loads(record.payload_json))
     setup.add(record)
     setup.commit()
     setup.close()
