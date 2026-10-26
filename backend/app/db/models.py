@@ -90,3 +90,14 @@ class ActionApprovalModel(Base):
     mfa_expires_at = Column(DateTime, nullable=True)
     mfa_consumed_at = Column(DateTime, nullable=True)
     audit_id = Column(String(64), nullable=True)  # Execution audit entry, returned on idempotent replay
+    conversation_id = Column(String(128), nullable=True)
+    continuation_status = Column(String(32), nullable=True)
+    continuation_json = Column(Text, nullable=True)
+
+
+class ConversationModel(Base):
+    __tablename__ = "agent_conversations"
+
+    user_id = Column(String(64), primary_key=True)
+    conversation_id = Column(String(128), primary_key=True)
+    state_json = Column(Text, nullable=False)

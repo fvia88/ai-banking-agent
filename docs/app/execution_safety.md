@@ -101,6 +101,7 @@ Calendar-based daily-total lifecycle is now implemented; see
 `daily_transfer_lifecycle.md` for its migration, locking and boundary tests.
 Explicit ESCALATED_TO_RED auditing and security-mode defaults are now completed;
 see `security_defaults_and_audit.md`. Still separate work: frontend conflict/retry and
-metadata transport, and trusted mutation-result continuation to P1. Broader failure
+metadata transport. Trusted mutation-result continuation to P1 is now implemented;
+see `agent_continuation.md`. Broader failure
 and recovery acceptance should include deployment/network fault scenarios, beyond
 the simulated commit and executor failures covered here.

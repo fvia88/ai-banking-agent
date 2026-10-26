@@ -100,6 +100,24 @@ export interface ExecutionResult {
   audit_id: string;
 }
 
+export interface ContinuationOutput {
+  execution: ExecutionResult;
+  chat: ChatOutput;
+}
+
+export async function continueAction(actionId: string): Promise<ContinuationOutput | null> {
+  const res = await fetch(`/api/v1/actions/${encodeURIComponent(actionId)}/continue`, {
+    method: 'POST', headers: { 'X-Demo-User-Id': DEMO_USER_ID },
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    // Mock and pre-migration tickets retain their ordinary approval UI.
+    if (res.status === 409 && data.detail === 'This action has no real-agent conversation link') return null;
+    throw new Error(data.detail || 'Conversation update unavailable');
+  }
+  return res.json();
+}
+
 export async function confirmAction(
   actionId: string,
   digest: string

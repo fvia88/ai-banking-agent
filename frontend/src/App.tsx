@@ -1,6 +1,6 @@
 // frontend/src/App.tsx
-import { useState, useEffect } from 'react';
-import { fetchAccounts, fetchTransactions, sendChatMessage, confirmAction, verifyAction, fetchSubscriptions, fetchStoredSubscriptions, fetchAuditLogs, fetchDemoInbox } from './api';
+import { useState, useEffect, useRef } from 'react';
+import { fetchAccounts, fetchTransactions, sendChatMessage, confirmAction, verifyAction, continueAction, fetchSubscriptions, fetchStoredSubscriptions, fetchAuditLogs, fetchDemoInbox } from './api';
 import type { Account, Transaction, ChatMessage, SubscriptionCandidate, StoredSubscription, AuditEvent, DemoInboxMessage } from './api';
 import { SubscriptionsPanel } from './SubscriptionsPanel';
 
@@ -24,6 +24,8 @@ export default function App() {
   ]);
   const [inputMessage, setInputMessage] = useState<string>('');
   const [sending, setSending] = useState<boolean>(false);
+  const deliveredUpdates = useRef(new Set<string>());
+  const [continuationErrors, setContinuationErrors] = useState<Record<string, string>>({});
   const [actionStates, setActionStates] = useState<
       Record<string, { status: string; message?: string; mfaCode?: string; error?: string; inboxMessage?: string }>
     >({});
@@ -90,6 +92,38 @@ export default function App() {
     }
   }
 
+  async function updateConversation(actionId: string) {
+    try {
+      const update = await continueAction(actionId);
+      if (!update) return;
+      setActionStates(prev => ({ ...prev, [actionId]: {
+        ...prev[actionId], status: update.execution.status, message: update.execution.message,
+      } }));
+      if (update.execution.status === 'PENDING_MFA') {
+        const inbox = await fetchDemoInbox().catch((): DemoInboxMessage[] => []);
+        setActionStates(prev => ({ ...prev, [actionId]: {
+          ...prev[actionId], inboxMessage: inbox.find(m => m.action_id === actionId)?.message,
+        } }));
+      }
+      const key = `${actionId}:${update.execution.status}`;
+      if (!deliveredUpdates.current.has(key)) {
+        deliveredUpdates.current.add(key);
+        setMessages(prev => [...prev, {
+          sender: 'agent', text: update.chat.reply, actions: update.chat.actions,
+        }]);
+      }
+      setContinuationErrors(prev => {
+        const next = { ...prev }; delete next[actionId]; return next;
+      });
+    } catch {
+      // The bank transaction already has its own committed outcome. A failed
+      // agent notification must never turn a successful transfer into "failed".
+      setContinuationErrors(prev => ({ ...prev,
+        [actionId]: 'Conversation update unavailable. Retry to retrieve the bank status and notify the agent.',
+      }));
+    }
+  }
+
   // handle clicking confirm
   async function handleConfirm(actionId: string, digest: string) {
     try {
@@ -116,9 +150,10 @@ export default function App() {
     } catch (err: unknown) {
       setActionStates((prev) => ({
         ...prev,
-        [actionId]: { status: 'FAILED', error: err instanceof Error ? err.message : 'Failed' },
+        [actionId]: { ...prev[actionId], status: prev[actionId]?.status || 'PENDING_CONFIRMATION', error: err instanceof Error ? err.message : 'Failed' },
       }));
     }
+    await updateConversation(actionId);
   }
 
   // handle entering the MFA code
@@ -138,6 +173,7 @@ export default function App() {
         [actionId]: { ...prev[actionId], error: err instanceof Error ? err.message : 'Invalid code' },
       }));
     }
+    await updateConversation(actionId);
   }
 
   return (
@@ -310,10 +346,19 @@ export default function App() {
                               </div>
                             )}
 
-                            {/* 4. Failed Badge */}
-                            {actionStates[act.arguments.action_id]?.status === 'FAILED' && (
+                            {/* Terminal refusal is distinct from notification failure. */}
+                            {['FAILED', 'REJECTED', 'CANCELLED'].includes(actionStates[act.arguments.action_id]?.status) && (
                               <div style={{ color: '#c62828', fontWeight: 'bold' }}>
-                                ❌ {actionStates[act.arguments.action_id]?.error || 'Failed.'}
+                                ❌ {actionStates[act.arguments.action_id]?.message || actionStates[act.arguments.action_id]?.error || 'Failed.'}
+                              </div>
+                            )}
+                            {actionStates[act.arguments.action_id]?.status === 'PENDING_CONFIRMATION' && actionStates[act.arguments.action_id]?.error && (
+                              <div style={{ color: '#c62828' }}>{actionStates[act.arguments.action_id]?.error}</div>
+                            )}
+                            {continuationErrors[act.arguments.action_id] && (
+                              <div>
+                                <small>{continuationErrors[act.arguments.action_id]}</small>{' '}
+                                <button onClick={() => updateConversation(act.arguments.action_id!)}>Retry conversation update</button>
                               </div>
                             )}
                           </div>

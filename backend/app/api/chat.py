@@ -1,15 +1,15 @@
 # backend/app/api/chat.py
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException
+import json
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from contracts.models import ChatInput, ChatOutput, BankingContext
 from contracts.enums import ActionStatus, Direction, ToolName
 from app.api.deps import get_current_user
 from app.db.session import get_db
-from app.db.models import UserModel, AccountModel, TransactionModel
-from app.services.adapters import agent_service, finance_service, subscriptions_service, build_tool_catalog
-from app.config import settings
-from app.services.actions import create_action_record, PolicyRejected
+from app.db.models import UserModel, AccountModel, TransactionModel, ActionApprovalModel
+from app.services.adapters import agent_service, finance_service
+from app.services.actions import PolicyRejected
 from app.services.session_store import (
     get_conversation_state,
     set_conversation_state,
@@ -21,7 +21,7 @@ from decimal import Decimal
 from contracts.models import Account, Transaction
 from contracts.tool_schemas import validate_tool_arguments
 from app.services.adapters import policy_service
-from app.services.subscriptions import selected_account, stored_records, subscription_report, cancellation_record
+from app.services.subscriptions import selected_account, stored_records, subscription_report
 from app.services.daily_transfers import effective_total
 
 router = APIRouter()
@@ -36,7 +36,38 @@ def handle_chat(
                if not agent_service.use_mock else chat_input.conversation_id)
   # Keep the lock until all processing/result handling and state saves finish.
   with conversation_session(state_key):
-    return _handle_chat_turn(chat_input, user, db, state_key)
+    if agent_service.use_mock:
+      return _handle_chat_turn(chat_input, user, db, state_key)
+    from app.services.session_store import lock_conversation
+    from app.api.continuation import continue_action
+    # Recover a committed result even when the browser missed its callback.
+    # Read-only tools already complete within their ordinary chat turn.
+    ready = db.query(ActionApprovalModel).filter_by(
+        user_id=user.user_id, conversation_id=chat_input.conversation_id,
+    ).filter(ActionApprovalModel.status.in_([
+        "PENDING_MFA", "COMPLETED", "FAILED", "REJECTED", "CANCELLED",
+    ])).order_by(ActionApprovalModel.created_at, ActionApprovalModel.action_id).all()
+    recovered = []
+    for action in ready:
+      if action.continuation_status != action.status:
+        update = continue_action(action.action_id, user=user, db=db)
+        recovered.append(update.chat.reply)
+        if update.chat.actions:
+          return update.chat.model_copy(update={"reply": update.chat.reply +
+              " Your latest message has not been processed; review this next approval, then resend your message."})
+    row = lock_conversation(db, user.user_id, chat_input.conversation_id)
+    set_conversation_state(state_key, json.loads(row.state_json))
+    try:
+      response = _handle_chat_turn(chat_input, user, db, state_key)
+      row.state_json = json.dumps(get_conversation_state(state_key))
+      db.commit()
+      if recovered:
+        response = response.model_copy(update={"reply": " ".join(recovered) + " " + response.reply})
+      return response
+    except Exception:
+      db.rollback()
+      clear_conversation_state(state_key)
+      raise
 
 
 def _handle_chat_turn(chat_input: ChatInput, user: UserModel, db: Session, state_key: str):
@@ -62,15 +93,8 @@ def _handle_chat_turn(chat_input: ChatInput, user: UserModel, db: Session, state
 
   # 4. Generate proposal with conversation context
   if real_agent:
-    # Recipients remain demo context; subscriptions come from owned DB records.
-    demo_context = (build_tool_catalog()[0]["context"]
-                    if user.user_id == settings.DEFAULT_DEMO_USER_ID else {})
-    agent_context = dict(
-        account_id=account_id,
-        account_locked=user.is_locked,
-        recipients=[r for r in demo_context.get("recipients", []) if r["user_id"] == user.user_id],
-        subscriptions=[s.model_dump(mode="json") for s in stored_records(db, user.user_id, account_id)],
-    )
+    from app.services.agent_context import trusted_agent_context
+    primary_acc, agent_context = trusted_agent_context(db, user)
     turn = agent_service.process_turn(
         chat_input, conversation_state=saved_state or None, **agent_context,
     )
@@ -201,73 +225,8 @@ def _handle_chat_turn(chat_input: ChatInput, user: UserModel, db: Session, state
             status=ActionStatus.COMPLETED,
         )
 
-  # 7. Otherwise: Mutation Action Proposals (Transfers & Cancellations)
-  has_pending_actions = False
-  pending_records = []
-  if result.proposals:
-      if primary_acc is None:
-          return ChatOutput(conversation_id=chat_input.conversation_id,
-                            reply="No owned account is available.", actions=[], status=ActionStatus.REJECTED)
-      balance_str = f"{primary_acc.balance:.2f}" if primary_acc else "0.00"
-      daily_total_str = f"{effective_total(primary_acc):.2f}" if primary_acc else "0.00"
-
-      context = BankingContext(
-          user_id=user.user_id,
-          account_id=account_id,
-          daily_transfer_total=daily_total_str,
-          account_balance=balance_str,
-          account_locked=user.is_locked,
-      )
-
-      for proposal in result.proposals:
-          try:
-              if proposal.tool == ToolName.REQUEST_SUBSCRIPTION_CANCEL:
-                  args = validate_tool_arguments(proposal.tool, proposal.arguments)
-                  cancellation_record(db, user.user_id, args.subscription_id, account_id)
-              action_record, digest, tier = create_action_record(
-                  user_id=user.user_id,
-                  proposal=proposal,
-                  source_account_id=account_id,
-                  context=context,
-              )
-
-              if tier in ["YELLOW", "RED"]:
-                  pending_records.append(action_record)
-                  proposal.arguments["action_id"] = action_record.action_id
-                  proposal.arguments["action_digest"] = digest
-                  proposal.arguments["tier"] = tier
-                  has_pending_actions = True
-              else:
-                  proposal.arguments["tier"] = "GREEN"
-
-          except ValueError as e:
-              reason = getattr(e, "reason_code", "INVALID_TOOL_ARGUMENTS")
-              explanation = {
-                  "ACCOUNT_LOCKED": "Your account is currently locked for state-changing operations.",
-                  "SOURCE_ACCOUNT_MISMATCH": "The source account does not match your selected account.",
-                  "ACCOUNT_MISMATCH": "The account does not match your authenticated context.",
-                  "INVALID_TOOL_ARGUMENTS": "The proposed action contains invalid or unexpected fields.",
-                  "SUBSCRIPTION_NOT_FOUND": "No verified subscription was found for this account.",
-                  "ALREADY_CANCELLED": "This subscription has already been cancelled.",
-                  "CANCELLATION_NOT_SUPPORTED": "Cancellation is not supported for this subscription.",
-                  "AMBIGUOUS_SUBSCRIPTION": "More than one subscription matches; please clarify.",
-              }.get(reason, "The action did not pass the security policy.")
-              return ChatOutput(
-                  conversation_id=chat_input.conversation_id,
-                  reply=f"Action blocked ({reason}): {explanation}",
-                  actions=[],
-                  status=ActionStatus.REJECTED,
-              )
-
-      db.add_all(pending_records)
-      db.commit()
-      status = ActionStatus.PENDING_CONFIRMATION if has_pending_actions else ActionStatus.COMPLETED
-  else:
-      status = ActionStatus.COMPLETED
-
-  return ChatOutput(
-      conversation_id=chat_input.conversation_id,
-      reply=result.reply,
-      actions=result.proposals,
-      status=status,
-  )
+  from app.services.proposals import present_proposals
+  response = present_proposals(chat_input, user, db, result, primary_acc)
+  if agent_service.use_mock:
+    db.commit()
+  return response

@@ -82,7 +82,7 @@ def test_upgrade_preserves_data_and_repeats(migration_engine, schema):
     upgrade_database(engine)
     assert snapshot(engine) == before
     with engine.connect() as connection:
-        assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "0004_transfer_day"
+        assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "0005_agent_continuation"
         assert connection.scalar(sa.text("SELECT daily_transfer_date FROM accounts WHERE account_id='a'")) is not None
         assert connection.execute(sa.text("SELECT status, mfa_issued_at, mfa_expires_at, mfa_consumed_at, audit_id FROM action_approvals")).one() == ("COMPLETED", None, None, None, None)
     # Full ORM select previously failed when even one mapped column was absent.
