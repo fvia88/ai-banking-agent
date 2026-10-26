@@ -26,15 +26,15 @@ def test_cross_scenario_orchestration_cancel_and_transfer_savings(client, db_ses
     # Verify Action 1 is Cancellation
     action_cancel = chat_data["actions"][0]
     assert action_cancel["tool"] == ToolName.REQUEST_SUBSCRIPTION_CANCEL.value
-    cancel_id = action_cancel["arguments"]["action_id"]
-    cancel_digest = action_cancel["arguments"]["action_digest"]
+    cancel_id = action_cancel["approval"]["action_id"]
+    cancel_digest = action_cancel["approval"]["action_digest"]
 
     # Verify Action 2 is Transfer of Savings
     action_transfer = chat_data["actions"][1]
     assert action_transfer["tool"] == ToolName.REQUEST_TRANSFER.value
     assert action_transfer["arguments"]["amount"] == "45.00"
-    transfer_id = action_transfer["arguments"]["action_id"]
-    transfer_digest = action_transfer["arguments"]["action_digest"]
+    transfer_id = action_transfer["approval"]["action_id"]
+    transfer_digest = action_transfer["approval"]["action_digest"]
 
     # 2. Confirm Action 1 (Cancel Subscription)
     res_cancel = client.post(
