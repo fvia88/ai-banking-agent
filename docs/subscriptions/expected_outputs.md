@@ -166,3 +166,30 @@ What this shows:
   connected yet**: the approval result is not passed back to the agent. This is the open
   item the finish plan lists for P1 and P2, not a P5 defect. Do not describe the
   cancel-then-transfer plan as working end to end until it is demonstrated.
+
+## 9. Blocked and ambiguous requests through the real app (shared fixture user)
+
+Run on 26 Oct 2026, modes `USE_MOCK_AGENT=false`, `AGENT_PROVIDER=mock`,
+`USE_MOCK_SECURITY=false`, disposable database. User `user_001` (fixtures). Nothing was
+approved in this run; every request only asks for a proposal.
+
+Stored records: `sub_cloudmusic` (active, not supported), `sub_streambox` (active,
+supported). Evidence: both monthly, confidence 0.85; `cancellation_supported` is true only
+for StreamBox, because it is filled from the stored record.
+
+| Message | Observed result |
+|---|---|
+| "Cancel CloudMusic subscription" | "Cancellation is unavailable for this subscription."; no action |
+| "Cancel Netflix subscription" | "I couldn't find a matching subscription in your verified list. Available for cancellation: "StreamBox"..."; no action |
+| "Cancel my subscription" | "Available for cancellation: "StreamBox". Please enter the full subscription name, or say never mind."; no action |
+| "Cancel StreamBox subscription" | `PENDING_CONFIRMATION`; one `request_subscription_cancel` for `sub_streambox`; "nothing has been executed" |
+| Records afterwards | both still `active` |
+
+What this shows: unsupported and unknown names produce no executable proposal, the reply
+offers only verified, supported choices (CloudMusic is not offered because it cannot be
+cancelled), and a supported record gets a proposal that still needs approval.
+
+Not covered here: two stored records with the same merchant name and price through the app
+(covered by unit tests only), and the browser screen.
+Note for P1/P2: blocked replies here return status `COMPLETED`, while the repeated
+cancellation of section 7 returns `REJECTED`; the status wording is not uniform.
