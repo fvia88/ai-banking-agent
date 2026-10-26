@@ -104,3 +104,37 @@ What this shows:
 * Different spellings of one merchant are treated as two merchants.
 * The three added reason codes need P2 and P1 agreement before the UI relies on them.
 * Cancellation is simulated; no merchant is contacted and no balance is credited.
+
+## 7. Recorded API walkthrough (disposable database)
+
+Run by P5 on 26 Oct 2026 against the real backend (`python backend/start.py`) with a
+throw-away database (`DATABASE_URL=sqlite:////tmp/p5_demo.db`, outside the repository).
+Demo identity header `X-Demo-User-Id: usr_demo_01` (Alice). Release commit: **to fill in
+at freeze (`git rev-parse --short HEAD`)**. The browser screen was not checked in this
+run (no Node.js on this machine); only the HTTP API was exercised.
+
+| Step | Request | Observed result |
+|---|---|---|
+| 1. Evidence | `GET /api/v1/subscriptions` | one candidate `sub_iqiyi_vip_monthly`, 45.00, monthly, confidence 0.4, evidence `tx_demo_003`, `tx_demo_002`, `cancellation_supported: true` (filled from the stored record) |
+| 2. Stored record | `GET /api/v1/subscriptions/records` | `sub_iQIYI_01`, `status: active`, `cancellation_supported: true` |
+| 3. Unknown account | `GET /api/v1/subscriptions?account_id=acc_khong_ton_tai` | 404 |
+| 4. Ask to cancel | `POST /api/v1/chat` "Cancel iQIYI VIP Monthly subscription" | `PENDING_CONFIRMATION`; proposal `request_subscription_cancel`, tier `YELLOW`, `subscription_id` = `sub_iQIYI_01` (the stored id, not the candidate id) |
+| 5. Before approval | `GET .../records` | still `active` |
+| 6. Approve without a body | `POST .../actions/{action_id}/confirm` | 422, nothing changed (the request needs `confirmation_id` and `action_digest`) |
+| 7. Approve | same call with `confirmation_id` and the proposal's `action_digest` | `COMPLETED`, "Subscription cancellation confirmed and executed successfully.", `audit_id: aud_fc45fcafaa` |
+| 8. After approval | `GET .../records` | `status: cancelled`, `cancellation_supported: true` |
+| 9. Replay | same approval again | `COMPLETED`, "Action already confirmed and executed (idempotent replay).", same `audit_id` |
+| 10. Ask again | `POST /api/v1/chat` in a new conversation | `REJECTED`, "Action blocked (ALREADY_CANCELLED): This subscription has already been cancelled.", no actions |
+| 11. Restart | stop and start the app on the same database file | log: "Database already contains users; existing data preserved." |
+| 12. After restart | `GET .../records` and `GET /subscriptions` | record still `cancelled`; the iQIYI evidence is still listed (confidence 0.4) but `cancellation_supported: false` |
+
+What this shows:
+
+* Cancellation happens once, with one linked audit id, and only after the explicit
+  approval. A proposal alone changes nothing.
+* Repeating the approval or asking again does not cancel twice.
+* The cancelled state survives a restart and is not reactivated by startup.
+* Recurring-charge evidence stays visible after cancellation and is not described as an
+  active subscription.
+* Not covered by this run: balance check, the transfer step of the planner, the browser
+  screen, PostgreSQL. Cancellation is simulated and no merchant is contacted.
