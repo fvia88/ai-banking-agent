@@ -275,3 +275,28 @@ def test_competing_red_verifications_cannot_overspend_account(race_database):
     if sorted(action["status"] for action in evidence["actions"]) != ["COMPLETED", "FAILED"]:
         violations.append("The refused Red action must be retired without a debit")
     assert_safe(evidence, violations)
+
+
+def test_first_concurrent_transfers_of_new_day_reset_once(race_database, monkeypatch):
+    from datetime import timedelta
+    from app.services import daily_transfers, mfa
+    instant = daily_transfers.utc_now()
+    starting = Decimal("2000.00")
+    actions = seed_actions(race_database, starting, [Decimal("600.00"), Decimal("600.00")])
+    with race_database() as db:
+        row = db.get(AccountModel, "race_account")
+        row.daily_transfer_date = daily_transfers.banking_day(instant) - timedelta(days=1)
+        row.daily_transfer_total = Decimal("800.00")
+        db.commit()
+    monkeypatch.setattr(daily_transfers, "utc_now", lambda: instant)
+    monkeypatch.setattr(mfa, "utc_now", lambda: instant)
+    outcomes, arrivals = run_confirmations(race_database, actions)
+    evidence, violations = inspect_result(race_database, outcomes, arrivals, starting)
+    if sorted(result.get("status", str(result["http"])) for result in outcomes) != ["COMPLETED", "PENDING_MFA"]:
+        violations.append("Concurrent rollover must not erase the first new-day debit")
+    if evidence["daily_total"] != "600.00" or evidence["ledger_count"] != 1:
+        violations.append("Only the first new-day 600 CNY debit may be counted without MFA")
+    with race_database() as db:
+        assert db.get(AccountModel, "race_account").daily_transfer_date == daily_transfers.banking_day(instant)
+        assert db.query(AuditLogModel).filter_by(action_type="DAILY_TRANSFER_TOTAL_RESET").count() == 1
+    assert_safe(evidence, violations)

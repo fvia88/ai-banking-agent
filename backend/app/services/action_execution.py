@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from contracts.enums import ActionStatus
 from contracts.models import ExecutionResult
 from app.db.models import ActionApprovalModel, UserModel
+from app.services.daily_transfers import EXECUTION_TIME_KEY
 
 
 PENDING = (ActionStatus.PENDING_CONFIRMATION.value, ActionStatus.PENDING_MFA.value)
@@ -83,3 +84,5 @@ def execute_claimed_action(
     except Exception:
         db.rollback()
         raise
+    finally:
+        db.info.pop(EXECUTION_TIME_KEY, None)

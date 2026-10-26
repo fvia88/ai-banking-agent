@@ -99,7 +99,9 @@ docker compose up -d --build backend
 Local development uses the existing backend startup script. No database reset or
 new migration is needed. No app container was rebuilt during verification.
 
-Still separate work: calendar-based daily-total reset, explicit ESCALATED_TO_RED
+Calendar-based daily-total lifecycle is now implemented; see
+`daily_transfer_lifecycle.md` for its migration, locking and boundary tests.
+Still separate work: explicit ESCALATED_TO_RED
 audit events, agreement on security-mode defaults, frontend conflict/retry and
 metadata transport, and trusted mutation-result continuation to P1. Broader failure
 and recovery acceptance should include deployment/network fault scenarios, beyond

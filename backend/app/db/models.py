@@ -1,7 +1,8 @@
 # backend/app/db/models.py
 from datetime import datetime, timezone
 from decimal import Decimal
-from sqlalchemy import Column, String, Boolean, Numeric, DateTime, ForeignKey, Text
+from sqlalchemy import Column, String, Boolean, Numeric, Date, DateTime, ForeignKey, Text
+from app.services.daily_transfers import banking_day
 from sqlalchemy.orm import relationship
 from app.db.session import Base
 
@@ -24,6 +25,7 @@ class AccountModel(Base):
     currency = Column(String(3), default="CNY", nullable=False)
     balance = Column(Numeric(18, 2), default=Decimal("0.00"), nullable=False)
     daily_transfer_total = Column(Numeric(18, 2), default=Decimal("0.00"), nullable=False)
+    daily_transfer_date = Column(Date, default=lambda: banking_day(), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
     user = relationship("UserModel", back_populates="accounts")

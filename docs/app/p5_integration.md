@@ -104,6 +104,6 @@ new sessions, preserving cancelled state and existing financial data.
 
 This does not add renewal reminders, real merchant cancellation, a general task
 planner or a correlated mutation-result continuation back into P1. Approval
-concurrency now uses the guard described in `execution_safety.md`. Daily-total
-reset and broader safety-lock behavior remain separate work. The current frontend
+concurrency now uses the guard described in `execution_safety.md`. Daily totals
+now use `daily_transfer_lifecycle.md`; broader safety-lock behavior remains separate work. The current frontend
 still uses its existing approval metadata transport.

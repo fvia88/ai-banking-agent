@@ -16,6 +16,7 @@ from app.services.adapters import policy_service
 from app.services.actions import compute_action_digest
 from app.services.subscriptions import cancellation_record, SubscriptionUnavailable
 from app.services.action_execution import execute_claimed_action
+from app.services import daily_transfers
 
 router = APIRouter()
 
@@ -52,9 +53,26 @@ def _current_policy(db: Session, user: UserModel, record: ActionApprovalModel):
         if account is None:
             reason = "SOURCE_ACCOUNT_MISMATCH"
         elif reason is None:
+            now = daily_transfers.utc_now()
+            if tool == ToolName.REQUEST_TRANSFER:
+                try:
+                    reset = daily_transfers.prepare_day(account, now)
+                except ValueError as exc:
+                    raise HTTPException(status_code=409, detail="Banking clock is earlier than this account's transfer day. Retry after the clock is corrected.") from exc
+                db.info[daily_transfers.EXECUTION_TIME_KEY] = now
+                if reset:
+                    db.add(AuditLogModel(
+                        audit_id=f"aud_{uuid.uuid4().hex[:10]}", action_id=record.action_id,
+                        user_id=user.user_id, action_type="DAILY_TRANSFER_TOTAL_RESET",
+                        payload_digest=record.action_digest, reason_code="SHANGHAI_DAY_CHANGED",
+                        details=json.dumps({"account_id": account.account_id, **reset}),
+                    ))
+                # The executor refreshes this row. Flush bookkeeping within the
+                # same locked transaction so it cannot reload yesterday's value.
+                db.flush()
             context = BankingContext(
                 user_id=user.user_id, account_id=account.account_id,
-                daily_transfer_total=account.daily_transfer_total,
+                daily_transfer_total=daily_transfers.effective_total(account, now),
                 account_balance=account.balance, account_locked=user.is_locked,
             )
             proposal = ActionProposal(

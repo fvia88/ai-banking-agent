@@ -49,7 +49,7 @@ The subsequent execution guard now protects concurrent confirmations and competi
 account transfers; see `execution_safety.md` for transaction boundaries, verified
 SQLite/PostgreSQL scenarios and remaining scope. MFA consumption and successful
 execution now commit together.
-Daily totals still lack a calendar reset. Recipient ownership needs verified
+Daily totals now use the lifecycle in `daily_transfer_lifecycle.md`. Recipient ownership needs verified
 backend records; P4's account matching does not validate recipient ownership.
 Subscription eligibility/persistence now uses the P5 integration described in
 `p5_integration.md`. Repeated

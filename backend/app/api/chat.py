@@ -22,6 +22,7 @@ from contracts.models import Account, Transaction
 from contracts.tool_schemas import validate_tool_arguments
 from app.services.adapters import policy_service
 from app.services.subscriptions import selected_account, stored_records, subscription_report, cancellation_record
+from app.services.daily_transfers import effective_total
 
 router = APIRouter()
 
@@ -116,7 +117,7 @@ def _handle_chat_turn(chat_input: ChatInput, user: UserModel, db: Session, state
             read_context = BankingContext(
                 user_id=user.user_id, account_id=account_id,
                 account_balance=primary_acc.balance,
-                daily_transfer_total=primary_acc.daily_transfer_total,
+                daily_transfer_total=effective_total(primary_acc),
                 account_locked=user.is_locked,
             )
             decision = policy_service.evaluate(proposal, read_context)
@@ -208,7 +209,7 @@ def _handle_chat_turn(chat_input: ChatInput, user: UserModel, db: Session, state
           return ChatOutput(conversation_id=chat_input.conversation_id,
                             reply="No owned account is available.", actions=[], status=ActionStatus.REJECTED)
       balance_str = f"{primary_acc.balance:.2f}" if primary_acc else "0.00"
-      daily_total_str = f"{primary_acc.daily_transfer_total:.2f}" if primary_acc else "0.00"
+      daily_total_str = f"{effective_total(primary_acc):.2f}" if primary_acc else "0.00"
 
       context = BankingContext(
           user_id=user.user_id,
