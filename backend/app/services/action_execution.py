@@ -1,4 +1,4 @@
-"""Database-backed approval serialization; shared by confirm and verify.
+"""Database-backed approval serialization; shared by confirm, verify and cancel.
 
 Acquire locks in user -> action -> account order. A no-op user UPDATE takes a
 row lock on PostgreSQL and a writer reservation on SQLite. Serializing all

@@ -52,9 +52,10 @@ Daily totals now use the lifecycle in `daily_transfer_lifecycle.md`. Recipient o
 backend records; P4's account matching does not validate recipient ownership.
 Subscription eligibility/persistence now uses the P5 integration described in
 `p5_integration.md`. Repeated
-OTP failure marks an action failed; it does not yet implement the challenge's
-broader user/account safety-lock policy. These require follow-up work with the
-relevant owners and are not guarantees of this bridge.
+OTP failure still retires its action. Owner-wide repeated verification failures
+now also trigger a persistent safety lock; see `safety_lock.md` for thresholds,
+audit, pending-ticket retirement, and manual demo reset. Remaining broader
+requirements are tracked in `broader_requirements_review.md`.
 
 ## Run
 

@@ -17,8 +17,64 @@ from app.services.actions import compute_action_digest
 from app.services.subscriptions import cancellation_record, SubscriptionUnavailable
 from app.services.action_execution import execute_claimed_action
 from app.services import daily_transfers
+from app.services.safety_lock import record_verification_failure
+from app.api.schemas import ApprovalMetadata, CancelApprovalRequest
 
 router = APIRouter()
+
+
+@router.get("/actions/{action_id}", response_model=ApprovalMetadata)
+def get_action_status(action_id: str, user: UserModel = Depends(get_current_user),
+                      db: Session = Depends(get_db)):
+    record = db.query(ActionApprovalModel).filter_by(
+        action_id=action_id, user_id=user.user_id,
+    ).populate_existing().first()
+    if record is None:
+        raise HTTPException(status_code=404, detail="Action not found")
+    return ApprovalMetadata(action_id=record.action_id, action_digest=record.action_digest,
+                            tier=record.tier, status=record.status)
+
+
+@router.post("/actions/{action_id}/cancel", response_model=ExecutionResult)
+def cancel_action(action_id: str, payload: CancelApprovalRequest,
+                  user: UserModel = Depends(get_current_user), db: Session = Depends(get_db)):
+    return execute_claimed_action(
+        db, user_id=user.user_id, action_id=action_id,
+        operation=lambda record, current_user: _cancel_locked_action(payload, current_user, db, record),
+    )
+
+
+def _cancel_locked_action(payload, user, db, record):
+    # Revoking an approval reduces authority. It remains available when locked
+    # or expired, and never runs a financial executor or clears a safety lock.
+    if payload.action_digest != record.action_digest:
+        raise HTTPException(status_code=400, detail="Approval digest mismatch. Cancellation was not applied.")
+    if record.status == ActionStatus.CANCELLED.value:
+        audit = db.query(AuditLogModel).filter_by(
+            audit_id=record.audit_id, user_id=user.user_id, action_id=record.action_id,
+            payload_digest=record.action_digest, action_type="APPROVAL_CANCELLED_BY_USER",
+        ).first() if record.audit_id else None
+        if audit is None:
+            raise HTTPException(status_code=409, detail="This action was already cancelled or expired; no new cancellation was applied.")
+        return ExecutionResult(action_id=record.action_id, status=ActionStatus.CANCELLED,
+            message="Approval already cancelled. This ticket can no longer execute.", audit_id=audit.audit_id)
+    if record.status not in (ActionStatus.PENDING_CONFIRMATION.value, ActionStatus.PENDING_MFA.value):
+        raise HTTPException(status_code=409, detail=f"Cannot cancel an action in {record.status} state. Completed operations cannot be reversed here.")
+    previous = record.status
+    record.status = ActionStatus.CANCELLED.value
+    record.verification_code = None
+    if record.mfa_issued_at is not None:
+        record.mfa_consumed_at = mfa.utc_now()
+    audit_id = "aud_" + uuid.uuid4().hex
+    record.audit_id = audit_id
+    db.add(AuditLogModel(
+        audit_id=audit_id, user_id=user.user_id, action_id=record.action_id,
+        action_type="APPROVAL_CANCELLED_BY_USER", payload_digest=record.action_digest,
+        reason_code="USER_CANCELLED_APPROVAL",
+        details=json.dumps({"previous_status": previous, "status": record.status, "tool": record.tool}),
+    ))
+    return ExecutionResult(action_id=record.action_id, status=ActionStatus.CANCELLED,
+        message="Pending approval cancelled. This ticket can no longer execute.", audit_id=audit_id)
 
 
 def _current_policy(db: Session, user: UserModel, record: ActionApprovalModel):
@@ -137,6 +193,7 @@ def _confirm_locked_action(payload, user, db, record):
     if payload.action_digest != record.action_digest:
         if record.status in (ActionStatus.PENDING_CONFIRMATION.value, ActionStatus.PENDING_MFA.value):
             record.status = ActionStatus.REJECTED.value
+            record_verification_failure(db, user, record, "CONFIRMATION_DIGEST_MISMATCH", mfa.utc_now())
             db.commit()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -273,6 +330,8 @@ def _verify_locked_action(payload, user, db, record):
             detail="Action proposal has expired"
         )
 
+    if user.is_locked:
+        _current_policy(db, user, record)
     check = mfa.check_challenge(record, payload.verification_code, now)
 
     if check == mfa.ChallengeCheck.NOT_ISSUED:
@@ -308,13 +367,17 @@ def _verify_locked_action(payload, user, db, record):
         remaining_attempts = (
             mfa.record_failed_attempt(db, record) if check == mfa.ChallengeCheck.WRONG_CODE else 0
         )
+        safety_locked = (record_verification_failure(db, user, record, "WRONG_MFA_CODE", now)
+                         if check == mfa.ChallengeCheck.WRONG_CODE else False)
 
-        if remaining_attempts <= 0:
+        if remaining_attempts <= 0 or safety_locked:
             record.status = ActionStatus.FAILED.value
             db.commit()
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Too many failed verification attempts. Action has been locked and marked FAILED."
+                detail=("Too many failed verification attempts. Action marked FAILED. "
+                        "Transfers and cancellations are locked until a manual demo reset."
+                        if safety_locked else "Too many failed verification attempts. Action has been locked and marked FAILED.")
             )
 
         db.commit()

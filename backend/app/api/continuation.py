@@ -71,10 +71,12 @@ def continue_action(action_id: str, user: UserModel = Depends(get_current_user),
             audit = db.query(AuditLogModel).filter_by(
                 user_id=user.user_id, action_id=action_id, payload_digest=record.action_digest,
             )
-            if status == "COMPLETED":
+            if status == "COMPLETED" or (status == "CANCELLED" and record.audit_id):
                 audit_record = audit.filter_by(audit_id=record.audit_id).first() if record.audit_id else None
                 if audit_record is None:
-                    raise HTTPException(409, "Completion audit could not be verified")
+                    raise HTTPException(409, "Terminal action audit could not be verified")
+                if status == "CANCELLED" and audit_record.action_type != "APPROVAL_CANCELLED_BY_USER":
+                    raise HTTPException(409, "Approval cancellation audit could not be verified")
             else:
                 # This is evidence of observed status, never an execution audit.
                 audit_record = AuditLogModel(

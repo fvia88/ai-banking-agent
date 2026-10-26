@@ -125,6 +125,32 @@ export interface VerifyActionRequest {
   idempotency_key: string;
 }
 
+export interface CancelApprovalRequest {
+  action_digest: string;
+  idempotency_key: string;
+}
+
+export async function fetchActionStatus(actionId: string): Promise<ApprovalMetadata> {
+  const res = await fetch(`/api/v1/actions/${encodeURIComponent(actionId)}`, {
+    headers: { 'X-Demo-User-Id': DEMO_USER_ID },
+  });
+  if (!res.ok) throw new Error('Could not retrieve the bank status for this approval');
+  return res.json();
+}
+
+export async function cancelAction(actionId: string, digest: string): Promise<ExecutionResult> {
+  const res = await fetch(`/api/v1/actions/${encodeURIComponent(actionId)}/cancel`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Demo-User-Id': DEMO_USER_ID },
+    body: JSON.stringify({ action_digest: digest, idempotency_key: `cancel_${actionId}` } satisfies CancelApprovalRequest),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || 'Cancellation could not be applied');
+  }
+  return res.json();
+}
+
 export interface ContinuationOutput {
   execution: ExecutionResult;
   chat: ChatOutput;

@@ -39,6 +39,8 @@ without executing. A bad digest cannot rewrite an already completed action.
 PostgreSQL lock acquisition is limited to five seconds; recognized lock/deadlock/
 serialization failures, and SQLite busy/locked errors, roll back and return 409.
 Retry the same action rather than creating another transfer to recover a conflict.
+Explicit approval cancellation now shares this guard. Cancellation and financial
+execution cannot both win for one ticket; see `approval_cancellation.md`.
 Replay protection here is tied to the server action ID; this does not introduce
 cross-action deduplication using idempotency_key. That field is now required by
 the shared HTTP request schemas; it does not replace action-level protection.

@@ -27,3 +27,8 @@ class PresentedAction(ActionProposal):
 
 class AppChatOutput(ChatOutput):
     actions: list[PresentedAction] = Field(default_factory=list)
+
+
+class CancelApprovalRequest(StrictModel):
+    action_digest: str
+    idempotency_key: ID

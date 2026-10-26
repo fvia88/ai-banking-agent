@@ -11,7 +11,8 @@ can still select P1's deterministic offline provider for testing.
 resolves the demo session owner, loads the action, verifies the stored proposal
 ID/tool/canonical arguments/digest against the original pending P1 request, and
 builds an `ExecutionResult` from the database. Completed actions require their
-persisted execution audit. Other statuses get an `ACTION_STATUS_OBSERVED` audit;
+persisted execution audit; explicit user cancellations use their cancellation
+audit. Other statuses get an `ACTION_STATUS_OBSERVED` audit;
 this records observation rather than claiming execution. OTPs and arbitrary
 exception messages are not sent to P1.
 
@@ -56,6 +57,8 @@ remaining plan; no unticketed proposal is left waiting for an impossible approva
 General planning, external merchant cancellation and broader takeover requirements
 remain outside this change. Frontend approval metadata now uses a separate
 `approval` object; see `frontend_metadata_transport.md`, including old-cache handling.
+Pending approval withdrawal now uses `approval_cancellation.md`; it is separate
+from the agent's pause/stop commands and does not reverse completed operations.
 
 ## Manual checks
 

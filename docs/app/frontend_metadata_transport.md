@@ -71,6 +71,11 @@ and required; the current execution guarantee remains tied to the server action
 ID. This change does not add a cross-action idempotency registry or request-body
 response caching. Retrying an existing action does not execute it twice.
 
+P2 also provides `POST /actions/{action_id}/cancel` with
+`{action_digest, idempotency_key}` and an owned `GET /actions/{action_id}` status
+read. These use separate approval metadata without adding fields to canonical
+tool arguments. See `approval_cancellation.md` for cancellation/retry behavior.
+
 ## Display and cache behavior
 
 `ApprovalCard` reads canonical transfer/cancellation arguments for the preview

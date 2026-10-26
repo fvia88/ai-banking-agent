@@ -16,7 +16,7 @@ const transfer = {
 
 function render(action = transfer, extra = {}) {
   return renderToStaticMarkup(createElement(ApprovalCard, {
-    action, onConfirm() {}, onVerify() {}, onCodeChange() {}, onRetry() {}, ...extra,
+    action, onConfirm() {}, onCancel() {}, onVerify() {}, onCodeChange() {}, onRetry() {}, ...extra,
   }));
 }
 
@@ -27,6 +27,7 @@ test('clean tool arguments plus separate approval render a confirmable transfer'
   assert.match(html, /act_from_backend/);
   assert.match(html, /Tier: YELLOW/);
   assert.match(html, /Confirm &amp; Execute/);
+  assert.match(html, /Cancel approval/);
   assert.doesNotMatch(html, /6-digit code|>Verify</);
 });
 
@@ -36,6 +37,7 @@ test('MFA status replaces confirmation with OTP and displays escalation to RED',
   assert.match(html, /6-digit code/);
   assert.match(html, /Verify/);
   assert.match(html, /Demo code: 123456/);
+  assert.match(html, /Cancel approval/);
   assert.doesNotMatch(html, /Confirm &amp; Execute/);
 });
 
@@ -43,7 +45,7 @@ test('completion keeps the escalated tier and cannot render execution controls',
   const html = render(transfer, { state: { status: 'COMPLETED', tier: 'RED', message: 'Bank confirmed completion.' } });
   assert.match(html, /Tier: RED/);
   assert.match(html, /Bank confirmed completion/);
-  assert.doesNotMatch(html, /Confirm &amp; Execute|6-digit code|>Verify</);
+  assert.doesNotMatch(html, /Confirm &amp; Execute|Cancel approval|6-digit code|>Verify</);
 });
 
 test('completed metadata from a replay is safe before local state exists', () => {
@@ -100,11 +102,53 @@ test('MFA sends the shared key and code without financial arguments or identity'
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test('cancellation sends only the approval digest and a stable action-scoped key', async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, options) => {
+    requests.push({ url, options });
+    return { ok: true, json: async () => ({ action_id: 'act/id', status: 'CANCELLED', audit_id: 'aud_cancel' }) };
+  };
+  try {
+    await api.cancelAction('act/id', 'a'.repeat(64));
+    await api.cancelAction('act/id', 'a'.repeat(64));
+    assert.equal(requests[0].url, '/api/v1/actions/act%2Fid/cancel');
+    const body = JSON.parse(requests[0].options.body);
+    assert.deepEqual(Object.keys(body).sort(), ['action_digest', 'idempotency_key']);
+    assert.equal(body.action_digest, 'a'.repeat(64));
+    assert.equal(requests[0].options.body, requests[1].options.body);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('cancellation conflicts remain errors rather than being labelled cancelled', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: false, json: async () => ({ detail: 'Already completed; cannot cancel' }) });
+  try {
+    await assert.rejects(api.cancelAction('act', 'a'.repeat(64)), /Already completed; cannot cancel/);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('status recovery uses the owned action read endpoint without an execution request', async () => {
+  const originalFetch = globalThis.fetch;
+  let request;
+  globalThis.fetch = async (url, options) => {
+    request = { url, options };
+    return { ok: true, json: async () => ({ ...transfer.approval, status: 'COMPLETED' }) };
+  };
+  try {
+    const metadata = await api.fetchActionStatus('act/id');
+    assert.equal(metadata.status, 'COMPLETED');
+    assert.equal(request.url, '/api/v1/actions/act%2Fid');
+    assert.equal(request.options.body, undefined);
+    assert.equal(request.options.method, undefined);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 for (const status of ['FAILED', 'REJECTED', 'CANCELLED']) {
   test(`${status} metadata cannot render confirmation or verification`, () => {
     const html = render({ ...transfer, approval: { ...transfer.approval, status } });
-    assert.match(html, new RegExp(status));
-    assert.doesNotMatch(html, /Confirm &amp; Execute|6-digit code|>Verify</);
+    assert.match(html, new RegExp(status, 'i'));
+    assert.doesNotMatch(html, /Confirm &amp; Execute|Cancel approval|6-digit code|>Verify</);
   });
 }
 
@@ -120,5 +164,12 @@ test('conversation delivery failure allows notification retry without another ex
   const html = render(transfer, { state: { status: 'COMPLETED' }, continuationError: 'Conversation update unavailable.' });
   assert.match(html, /Executed successfully/);
   assert.match(html, /Retry conversation update/);
-  assert.doesNotMatch(html, /Confirm &amp; Execute|6-digit code/);
+  assert.doesNotMatch(html, /Confirm &amp; Execute|Cancel approval|6-digit code/);
+});
+
+test('pending controls and notification retry are disabled during an action request', () => {
+  const html = render(transfer, { state: { status: 'PENDING_MFA' }, busy: true, continuationError: 'Retry later' });
+  assert.match(html, /Cancel approval/);
+  assert.match(html, /Verify/);
+  assert.equal((html.match(/<button disabled=""/g) || []).length, 3);
 });

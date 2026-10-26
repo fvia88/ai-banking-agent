@@ -1,6 +1,6 @@
 // frontend/src/App.tsx
 import { useState, useEffect, useRef } from 'react';
-import { fetchAccounts, fetchTransactions, sendChatMessage, confirmAction, verifyAction, continueAction, fetchSubscriptions, fetchStoredSubscriptions, fetchAuditLogs, fetchDemoInbox } from './api';
+import { fetchAccounts, fetchTransactions, sendChatMessage, confirmAction, verifyAction, cancelAction, fetchActionStatus, continueAction, fetchSubscriptions, fetchStoredSubscriptions, fetchAuditLogs, fetchDemoInbox } from './api';
 import type { Account, Transaction, ChatMessage, ActionProposal, SubscriptionCandidate, StoredSubscription, AuditEvent, DemoInboxMessage } from './api';
 import { SubscriptionsPanel } from './SubscriptionsPanel';
 import { ApprovalCard } from './ApprovalCard';
@@ -28,6 +28,8 @@ export default function App() {
   const [inputMessage, setInputMessage] = useState<string>('');
   const [sending, setSending] = useState<boolean>(false);
   const deliveredUpdates = useRef(new Set<string>());
+  const inFlightActions = useRef(new Set<string>());
+  const [busyActions, setBusyActions] = useState<Record<string, boolean>>({});
   const [continuationErrors, setContinuationErrors] = useState<Record<string, string>>({});
   const [actionStates, setActionStates] = useState<
       Record<string, ActionUiState>
@@ -141,6 +143,47 @@ export default function App() {
     }
   }
 
+  async function runAction(actionId: string, operation: () => Promise<void>) {
+    if (inFlightActions.current.has(actionId)) return;
+    inFlightActions.current.add(actionId);
+    setBusyActions(prev => ({ ...prev, [actionId]: true }));
+    try {
+      await operation();
+    } finally {
+      inFlightActions.current.delete(actionId);
+      setBusyActions(prev => ({ ...prev, [actionId]: false }));
+    }
+  }
+
+  async function handleCancel(actionId: string, digest: string) {
+    try {
+      const result = await cancelAction(actionId, digest);
+      setActionStates(prev => ({ ...prev, [actionId]: {
+        ...prev[actionId], status: result.status, message: result.message,
+        mfaCode: undefined, inboxMessage: undefined, error: undefined,
+      } }));
+    } catch (err: unknown) {
+      const error = err instanceof Error ? err.message : 'Cancellation could not be applied';
+      try {
+        // A confirmation may have won the race, or the cancellation response
+        // may have been lost after commit. Read bank state before labelling it.
+        const approval = await fetchActionStatus(actionId);
+        setActionStates(prev => ({ ...prev, [actionId]: {
+          ...mergeApprovalState(prev[actionId], approval),
+          message: approval.status === 'CANCELLED' ? 'Approval is cancelled. This ticket can no longer execute.'
+            : approval.status === 'COMPLETED' ? 'The bank completed this action; cancellation was not applied.' : undefined,
+          error: approval.status === 'CANCELLED' ? undefined : error,
+        } }));
+      } catch {
+        setActionStates(prev => ({ ...prev, [actionId]: { ...prev[actionId],
+          error: 'Cancellation outcome could not be verified. Retry cancellation to retrieve the bank outcome.',
+        } }));
+      }
+    }
+    await loadData();
+    await updateConversation(actionId);
+  }
+
   // handle clicking confirm
   async function handleConfirm(actionId: string, digest: string) {
     try {
@@ -169,6 +212,7 @@ export default function App() {
         ...prev,
         [actionId]: { ...prev[actionId], status: prev[actionId]?.status || 'PENDING_CONFIRMATION', error: err instanceof Error ? err.message : 'Failed' },
       }));
+      await loadData();
     }
     await updateConversation(actionId);
   }
@@ -189,6 +233,7 @@ export default function App() {
         ...prev,
         [actionId]: { ...prev[actionId], error: err instanceof Error ? err.message : 'Invalid code' },
       }));
+      await loadData();
     }
     await updateConversation(actionId);
   }
@@ -211,6 +256,12 @@ export default function App() {
       )}
 
       {/* Account Balance Card */}
+      {accounts.some(account => account.locked) && (
+        <p role="alert" style={{ padding: '12px', background: '#ffebee', color: '#c62828' }}>
+          Transfers and subscription cancellations are locked. Read-only queries remain available.
+          A demo operator must review and reset an automatic safety lock before new actions can proceed.
+        </p>
+      )}
       <section style={{ marginBottom: '24px' }}>
         <h3>💳 Bank Accounts</h3>
         {accounts.map((acc) => (
@@ -266,7 +317,11 @@ export default function App() {
                       <ApprovalCard key={act.approval.action_id} action={act}
                         state={actionStates[act.approval.action_id]}
                         continuationError={continuationErrors[act.approval.action_id]}
-                        onConfirm={handleConfirm} onVerify={handleVerify} onRetry={updateConversation}
+                        busy={busyActions[act.approval.action_id]}
+                        onConfirm={(id, digest) => runAction(id, () => handleConfirm(id, digest))}
+                        onCancel={(id, digest) => runAction(id, () => handleCancel(id, digest))}
+                        onVerify={(id, code) => runAction(id, () => handleVerify(id, code))}
+                        onRetry={id => runAction(id, () => updateConversation(id))}
                         onCodeChange={(actionId, code) => setActionStates(prev => ({
                           ...prev, [actionId]: { ...prev[actionId],
                             status: prev[actionId]?.status ?? act.approval.status, mfaCode: code, error: undefined },

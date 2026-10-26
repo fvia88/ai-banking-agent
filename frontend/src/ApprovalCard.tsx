@@ -6,16 +6,18 @@ interface Props {
   action: ActionProposal;
   state?: ActionUiState;
   continuationError?: string;
+  busy?: boolean;
   onConfirm: (actionId: string, digest: string) => void;
+  onCancel: (actionId: string, digest: string) => void;
   onVerify: (actionId: string, code: string) => void;
   onCodeChange: (actionId: string, code: string) => void;
   onRetry: (actionId: string) => void;
 }
 
-export function ApprovalCard({ action, state, continuationError, onConfirm, onVerify, onCodeChange, onRetry }: Props) {
+export function ApprovalCard({ action, state, continuationError, busy = false, onConfirm, onCancel, onVerify, onCodeChange, onRetry }: Props) {
   const { action_id: actionId, action_digest: digest } = action.approval;
   const { status, tier } = mergeApprovalState(state, action.approval);
-  const terminalRefusal = ['FAILED', 'REJECTED', 'CANCELLED'].includes(status);
+  const terminalRefusal = ['FAILED', 'REJECTED'].includes(status);
 
   return (
     <div style={{ background: '#fff', border: `2px solid ${tier === 'RED' ? '#d32f2f' : '#fbc02d'}`,
@@ -41,7 +43,7 @@ export function ApprovalCard({ action, state, continuationError, onConfirm, onVe
         Ticket ID: <code>{actionId}</code>
         <div style={{ marginTop: '8px', paddingTop: '6px', borderTop: '1px dashed #ccc' }}>
           {status === 'PENDING_CONFIRMATION' && (
-            <button onClick={() => onConfirm(actionId, digest)}
+            <button disabled={busy} onClick={() => onConfirm(actionId, digest)}
               style={{ padding: '4px 10px', background: '#2e7d32', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}>
               ✅ Confirm &amp; Execute
             </button>
@@ -56,7 +58,7 @@ export function ApprovalCard({ action, state, continuationError, onConfirm, onVe
               <div style={{ display: 'flex', gap: '4px', marginTop: '4px' }}>
                 <input type="text" placeholder="6-digit code" value={state?.mfaCode || ''}
                   onChange={e => onCodeChange(actionId, e.target.value)} style={{ padding: '4px', width: '100px' }} />
-                <button onClick={() => onVerify(actionId, state?.mfaCode || '')}
+                <button disabled={busy} onClick={() => onVerify(actionId, state?.mfaCode || '')}
                   style={{ padding: '4px 8px', background: '#d32f2f', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
                   Verify
                 </button>
@@ -64,8 +66,17 @@ export function ApprovalCard({ action, state, continuationError, onConfirm, onVe
               {state?.error && <small style={{ color: '#c62828' }}>⚠️ {state.error}</small>}
             </div>
           )}
+          {(status === 'PENDING_CONFIRMATION' || status === 'PENDING_MFA') && (
+            <button disabled={busy} onClick={() => onCancel(actionId, digest)}
+              style={{ marginTop: '8px', padding: '4px 10px', cursor: 'pointer' }}>
+              Cancel approval
+            </button>
+          )}
           {status === 'COMPLETED' && (
             <div style={{ color: '#2e7d32', fontWeight: 'bold' }}>🎉 {state?.message || 'Executed successfully!'}</div>
+          )}
+          {status === 'CANCELLED' && (
+            <div style={{ color: '#555', fontWeight: 'bold' }}>Approval cancelled. This ticket can no longer execute.</div>
           )}
           {terminalRefusal && (
             <div style={{ color: '#c62828', fontWeight: 'bold' }}>❌ {state?.message || state?.error || `${status}.`}</div>
@@ -75,7 +86,7 @@ export function ApprovalCard({ action, state, continuationError, onConfirm, onVe
           )}
           {continuationError && (
             <div><small>{continuationError}</small>{' '}
-              <button onClick={() => onRetry(actionId)}>Retry conversation update</button>
+              <button disabled={busy} onClick={() => onRetry(actionId)}>Retry conversation update</button>
             </div>
           )}
         </div>
