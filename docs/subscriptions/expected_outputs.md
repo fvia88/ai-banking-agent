@@ -112,6 +112,10 @@ throw-away database (`DATABASE_URL=sqlite:////tmp/p5_demo.db`, outside the repos
 Demo identity header `X-Demo-User-Id: usr_demo_01` (Alice). Release commit: **to fill in
 at freeze (`git rev-parse --short HEAD`)**. The browser screen was not checked in this
 run (no Node.js on this machine); only the HTTP API was exercised.
+Modes of this run: local defaults, so the chat step used the backend's mock agent
+(`USE_MOCK_AGENT` defaults to true). The P5 detector, mapping, stored records and
+cancellation executor were the real code. Section 8 repeats the cancellation with P1's
+real agent.
 
 | Step | Request | Observed result |
 |---|---|---|
@@ -138,3 +142,27 @@ What this shows:
   active subscription.
 * Not covered by this run: balance check, the transfer step of the planner, the browser
   screen, PostgreSQL. Cancellation is simulated and no merchant is contacted.
+
+## 8. Planner check with the real agent (cancel, then transfer)
+
+Run on 26 Oct 2026, fresh disposable database, modes `USE_MOCK_AGENT=false`,
+`AGENT_PROVIDER=mock` (deterministic, no live model), `USE_MOCK_SECURITY=false`.
+Message: "Cancel iQIYI VIP Monthly subscription then transfer 45 CNY to Bob".
+
+| Step | Observed result |
+|---|---|
+| Balance before | 15250.00 CNY (`acc_cny_001`) |
+| Chat | `PENDING_CONFIRMATION`; reply says cancellation comes first, each action needs separate approval and cancelling adds no money; only one action proposed: `request_subscription_cancel` for `sub_iQIYI_01` |
+| Approve the cancellation | `COMPLETED`, `audit_id: aud_493618391e` |
+| Balance after | 15250.00 CNY, unchanged |
+| Transfer step | **not proposed** after completion; the approval response carries no next action |
+
+What this shows:
+
+* The subscription part is correct: only the verified stored record is proposed, it is
+  cancelled once, no refund or credit is created, and nothing is transferred
+  automatically.
+* The second step (the transfer proposal after a completed cancellation) is **not
+  connected yet**: the approval result is not passed back to the agent. This is the open
+  item the finish plan lists for P1 and P2, not a P5 defect. Do not describe the
+  cancel-then-transfer plan as working end to end until it is demonstrated.
