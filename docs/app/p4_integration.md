@@ -1,9 +1,11 @@
 # P4 policy integration
 
-The backend now calls `security.policy.evaluate_action(proposal, context)` by
-default. No changes to P4's module or frozen contracts are required.
+The backend can call `security.policy.evaluate_action(proposal, context)` through
+the real adapter. No changes to P4's module or frozen contracts are required.
 
-`USE_MOCK_SECURITY=false` selects real P4 (the default in local code and Compose).
+`USE_MOCK_SECURITY=false` selects real P4 (the default in Compose). The merged
+local adapter defaults to mock when unset; the conflicting default expectations
+in tests still need agreement, so set this variable explicitly for local runs.
 `USE_MOCK_SECURITY=true` explicitly selects the P2 mock for isolated demos. A
 failed real evaluator import is not silently replaced with a mock. P1 provider
 selection is independent: real P1 with `AGENT_PROVIDER=mock` can exercise real P4
@@ -43,9 +45,10 @@ stored payload tampering, sequential cumulative escalation, changed policy durin
 MFA, replay, and real P1 + real P4 operation with a deterministic LLM provider.
 Existing OTP lifecycle and race tests continue to run with real P4 enabled.
 
-This integration does not establish full concurrency safety: simultaneous Yellow
-confirmations or competing account transfers still need database serialization.
-The existing consumed-MFA-marker/execution transaction split also remains.
+The subsequent execution guard now protects concurrent confirmations and competing
+account transfers; see `execution_safety.md` for transaction boundaries, verified
+SQLite/PostgreSQL scenarios and remaining scope. MFA consumption and successful
+execution now commit together.
 Daily totals still lack a calendar reset. Recipient ownership needs verified
 backend records; P4's account matching does not validate recipient ownership.
 Subscription eligibility/persistence now uses the P5 integration described in
@@ -63,5 +66,6 @@ docker compose up -d --build
 ```
 
 Local users restart `python backend/start.py --reload` with
-`USE_MOCK_SECURITY=false` (or leave it unset). No database migration is introduced
+`USE_MOCK_SECURITY=false` explicitly (the merged local default currently selects
+mock when unset). No database migration is introduced
 by this policy integration.

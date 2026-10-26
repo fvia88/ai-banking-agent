@@ -30,7 +30,7 @@ def execute_transfer(
     account = db.query(AccountModel).filter(
         AccountModel.account_id == source_acc_id,
         AccountModel.user_id == user.user_id
-    ).first()
+    ).with_for_update().populate_existing().first()
 
     if not account:
         raise HTTPException(

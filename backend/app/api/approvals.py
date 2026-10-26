@@ -15,6 +15,7 @@ from app.services import mfa
 from app.services.adapters import policy_service
 from app.services.actions import compute_action_digest
 from app.services.subscriptions import cancellation_record, SubscriptionUnavailable
+from app.services.action_execution import execute_claimed_action
 
 router = APIRouter()
 
@@ -22,8 +23,8 @@ router = APIRouter()
 def _current_policy(db: Session, user: UserModel, record: ActionApprovalModel):
     """Revalidate stored canonical arguments and build context from current owned DB rows.
 
-    This check is required at both confirm and verify; it is not a replacement
-    for account/action serialization against concurrent requests.
+    Called only after the shared execution guard claims the action/user. Account
+    row locks and fresh reads stay in that same transaction through execution.
     """
     reason = None
     try:
@@ -47,7 +48,7 @@ def _current_policy(db: Session, user: UserModel, record: ActionApprovalModel):
                 query = query.filter(AccountModel.account_id == subscription.account_id)
             except SubscriptionUnavailable as exc:
                 reason = exc.reason_code
-        account = query.populate_existing().first()
+        account = query.with_for_update().populate_existing().first()
         if account is None:
             reason = "SOURCE_ACCOUNT_MISMATCH"
         elif reason is None:
@@ -114,21 +115,19 @@ def confirm_action(
     user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    record = db.query(ActionApprovalModel).filter(
-        ActionApprovalModel.action_id == action_id,
-        ActionApprovalModel.user_id == user.user_id
-    ).first()
+    return execute_claimed_action(
+        db, user_id=user.user_id, action_id=action_id,
+        operation=lambda record, current_user: _confirm_locked_action(payload, current_user, db, record),
+    )
 
-    if not record:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Action '{action_id}' not found for current user"
-        )
+
+def _confirm_locked_action(payload, user, db, record):
 
     # Anti-Tampering Check
     if payload.action_digest != record.action_digest:
-        record.status = ActionStatus.REJECTED.value
-        db.commit()
+        if record.status in (ActionStatus.PENDING_CONFIRMATION.value, ActionStatus.PENDING_MFA.value):
+            record.status = ActionStatus.REJECTED.value
+            db.commit()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Payload digest mismatch. Tampering detected or invalid payload."
@@ -153,7 +152,7 @@ def confirm_action(
 
     # Expiration check
     now = mfa.utc_now()
-    if mfa.as_utc(record.expires_at) < now:
+    if mfa.as_utc(record.expires_at) <= now:
         record.status = ActionStatus.CANCELLED.value
         db.commit()
         raise HTTPException(
@@ -177,8 +176,6 @@ def confirm_action(
             reason_code="RED_TIER_MFA_REQUIRED",
             details=f"Simulated OTP challenge issued; expires at {record.mfa_expires_at.isoformat()}."
         ))
-        db.commit()
-
         ttl_minutes = int(mfa.MFA_CODE_TTL.total_seconds() // 60)
         return ExecutionResult(
             action_id=record.action_id,
@@ -192,11 +189,22 @@ def confirm_action(
         )
 
     # YELLOW Tier: Execute atomically and complete
-    audit_id, message = _execute_action(db, user, record)
-
-    record.status = ActionStatus.COMPLETED.value
-    record.audit_id = audit_id
-    db.commit()
+    try:
+        audit_id, message = _execute_action(db, user, record)
+        record.status = ActionStatus.COMPLETED.value
+        record.audit_id = audit_id
+    except HTTPException:
+        # Same rollback-before-failure rule as P3's Red execution recovery.
+        # A conditional write must never overwrite a concurrent completion.
+        action_id, user_id = record.action_id, user.user_id
+        db.rollback()
+        db.query(ActionApprovalModel).filter(
+            ActionApprovalModel.action_id == action_id,
+            ActionApprovalModel.user_id == user_id,
+            ActionApprovalModel.status == ActionStatus.PENDING_CONFIRMATION.value,
+        ).update({ActionApprovalModel.status: ActionStatus.FAILED.value}, synchronize_session=False)
+        db.commit()
+        raise
 
     return ExecutionResult(
         action_id=record.action_id,
@@ -212,16 +220,13 @@ def verify_action(
     user: UserModel = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    record = db.query(ActionApprovalModel).filter(
-        ActionApprovalModel.action_id == action_id,
-        ActionApprovalModel.user_id == user.user_id
-    ).first()
+    return execute_claimed_action(
+        db, user_id=user.user_id, action_id=action_id,
+        operation=lambda record, current_user: _verify_locked_action(payload, current_user, db, record),
+    )
 
-    if not record:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Action '{action_id}' not found for current user"
-        )
+
+def _verify_locked_action(payload, user, db, record):
 
     # Idempotent replay for verify
     if record.status == ActionStatus.COMPLETED.value:
@@ -301,12 +306,8 @@ def verify_action(
     # A correct OTP cannot override a new lock or a changed policy decision.
     _current_policy(db, user, record)
 
-    # Persist any earlier writes (none expected) so the claim transaction below
-    # contains only the claim, the execution and the completion.
-    db.commit()
-
-    # Claim + execute + complete commit together: either all of it lands or none
-    # of it does, so a crash or DB error can never strand a consumed challenge.
+    # Keep the action/user/account locks and fresh policy context through the
+    # MFA claim and execution. The shared guard commits them together.
     if not mfa.claim_challenge(db, record, now):
         db.rollback()
         raise HTTPException(
@@ -317,7 +318,6 @@ def verify_action(
         audit_id, _ = _execute_action(db, user, record)
         record.status = ActionStatus.COMPLETED.value
         record.audit_id = audit_id
-        db.commit()
     except HTTPException:
         # Executor refused (e.g. insufficient funds): undo any partial writes,
         # then retire the action so the same code cannot be replayed.

@@ -338,8 +338,9 @@ def test_legacy_stranded_challenge_is_retired_not_stuck(client, db_session):
 def test_truly_concurrent_verifies_debit_once(tmp_path, monkeypatch):
     """
     Two threads, each with its own DB session on a shared file-based SQLite DB,
-    both pass the code check before either claims the challenge (forced with a
-    barrier). Only the atomic claim stands between them and a double debit.
+    both load the pending action before entering the database execution guard.
+    Synchronize before locking; pausing inside OTP checking would deadlock a
+    correctly serialized implementation.
     """
     engine = create_engine(
         f"sqlite:///{tmp_path / 'race.db'}",
@@ -369,14 +370,14 @@ def test_truly_concurrent_verifies_debit_once(tmp_path, monkeypatch):
     setup.close()
 
     barrier = threading.Barrier(2, timeout=5)
-    original_check = mfa.check_challenge
+    from app.services import action_execution
+    original_claim = action_execution.claim_pending_action
 
-    def check_then_wait(*args, **kwargs):
-        result = original_check(*args, **kwargs)
-        barrier.wait()  # both threads have passed the check before either claims
-        return result
+    def wait_then_claim(*args, **kwargs):
+        barrier.wait()  # both requests loaded the old pending snapshot
+        return original_claim(*args, **kwargs)
 
-    monkeypatch.setattr(mfa, "check_challenge", check_then_wait)
+    monkeypatch.setattr(action_execution, "claim_pending_action", wait_then_claim)
 
     outcomes = []
 
@@ -402,6 +403,7 @@ def test_truly_concurrent_verifies_debit_once(tmp_path, monkeypatch):
     for t in threads:
         t.join(timeout=15)
 
+    assert not any(t.is_alive() for t in threads), "Verification worker did not terminate"
     assert sorted(outcomes) == [("http", 409), ("ok", ActionStatus.COMPLETED)], outcomes
 
     check = SessionFactory()
