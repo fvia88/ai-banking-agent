@@ -40,7 +40,8 @@ PostgreSQL lock acquisition is limited to five seconds; recognized lock/deadlock
 serialization failures, and SQLite busy/locked errors, roll back and return 409.
 Retry the same action rather than creating another transfer to recover a conflict.
 Replay protection here is tied to the server action ID; this does not introduce
-cross-action deduplication using the currently optional idempotency_key field.
+cross-action deduplication using idempotency_key. That field is now required by
+the shared HTTP request schemas; it does not replace action-level protection.
 
 Expected Yellow executor refusals now roll back partial financial writes and
 conditionally record FAILED, matching Red's existing rollback-before-failure
@@ -100,8 +101,9 @@ new migration is needed. No app container was rebuilt during verification.
 Calendar-based daily-total lifecycle is now implemented; see
 `daily_transfer_lifecycle.md` for its migration, locking and boundary tests.
 Explicit ESCALATED_TO_RED auditing and security-mode defaults are now completed;
-see `security_defaults_and_audit.md`. Still separate work: frontend conflict/retry and
-metadata transport. Trusted mutation-result continuation to P1 is now implemented;
+see `security_defaults_and_audit.md`. Approval metadata transport is now separated;
+see `frontend_metadata_transport.md`. Broader frontend conflict/recovery UX still
+needs release acceptance. Trusted mutation-result continuation to P1 is now implemented;
 see `agent_continuation.md`. Broader failure
 and recovery acceptance should include deployment/network fault scenarios, beyond
 the simulated commit and executor failures covered here.

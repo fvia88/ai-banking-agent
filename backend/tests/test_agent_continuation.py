@@ -30,13 +30,13 @@ def propose(client, message="Transfer 20 CNY to Bob", conversation="continuation
 
 
 def confirm(client, action):
-    return client.post(f'/api/v1/actions/{action["arguments"]["action_id"]}/confirm',
-        headers=ALICE, json={"confirmation_id": "conf_test",
-                             "action_digest": action["arguments"]["action_digest"]})
+    return client.post(f'/api/v1/actions/{action["approval"]["action_id"]}/confirm',
+        headers=ALICE, json={"idempotency_key": "test_request", "confirmation_id": "conf_test",
+                             "action_digest": action["approval"]["action_digest"]})
 
 
 def deliver(client, action, headers=ALICE):
-    return client.post(f'/api/v1/actions/{action["arguments"]["action_id"]}/continue', headers=headers)
+    return client.post(f'/api/v1/actions/{action["approval"]["action_id"]}/continue', headers=headers)
 
 
 def saved(db, conversation="continuation"):
@@ -75,9 +75,9 @@ def test_mfa_waits_then_completes_without_forwarding_secret(client, db_session, 
     assert pending.status_code == 200, pending.text
     assert "PENDING_MFA" in pending.json()["chat"]["reply"]
     assert len(saved(db_session)["pending_tool_requests"]) == 1
-    action_id = action["arguments"]["action_id"]
+    action_id = action["approval"]["action_id"]
     verified = client.post(f"/api/v1/actions/{action_id}/verify", headers=ALICE,
-                          json={"verification_code": code})
+                          json={"idempotency_key": "test_request", "verification_code": code})
     assert verified.json()["status"] == "COMPLETED"
     assert deliver(client, action).json()["execution"]["status"] == "COMPLETED"
     assert not saved(db_session)["pending_tool_requests"]
@@ -91,7 +91,7 @@ def test_terminal_failure_is_consumed_honestly(client, db_session, failure):
     if failure == "locked":
         db_session.get(UserModel, "usr_demo_01").is_locked = True
     elif failure == "expired":
-        db_session.get(ActionApprovalModel, action["arguments"]["action_id"]).expires_at = mfa.utc_now() - timedelta(seconds=1)
+        db_session.get(ActionApprovalModel, action["approval"]["action_id"]).expires_at = mfa.utc_now() - timedelta(seconds=1)
     else:
         db_session.get(AccountModel, "acc_cny_001").balance = Decimal("1")
     db_session.commit()
@@ -129,7 +129,7 @@ def test_agent_failure_cannot_roll_back_transfer_and_retry_recovers(client, db_s
     monkeypatch.setattr(agent_service, "process_turn", fail)
     with pytest.raises(RuntimeError, match="Synthetic provider outage"):
         deliver(client, action)
-    assert db_session.get(ActionApprovalModel, action["arguments"]["action_id"]).status == "COMPLETED"
+    assert db_session.get(ActionApprovalModel, action["approval"]["action_id"]).status == "COMPLETED"
     assert len(saved(db_session)["pending_tool_requests"]) == 1
     monkeypatch.setattr(agent_service, "process_turn", actual)
     assert deliver(client, action).status_code == 200
@@ -144,7 +144,7 @@ def test_plan_continues_to_new_approval_without_moving_money(client, db_session)
     assert result.status_code == 200, result.text
     followup = result.json()["chat"]["actions"][0]
     assert followup["tool"] == "request_transfer"
-    assert followup["arguments"]["action_id"] != action["arguments"]["action_id"]
+    assert followup["approval"]["action_id"] != action["approval"]["action_id"]
     assert db_session.get(AccountModel, "acc_cny_001").balance == Decimal("15250")
     assert db_session.query(TransactionModel).filter_by(category="Transfers").count() == 0
     assert deliver(client, action).json() == result.json()
@@ -196,7 +196,7 @@ def test_continuation_commit_failure_rolls_back_next_ticket_and_retry_recovers(c
         deliver(client, action)
     assert db_session.query(ActionApprovalModel).count() == 1
     assert len(saved(db_session)["pending_tool_requests"]) == 1
-    assert db_session.get(ActionApprovalModel, action["arguments"]["action_id"]).status == "COMPLETED"
+    assert db_session.get(ActionApprovalModel, action["approval"]["action_id"]).status == "COMPLETED"
     monkeypatch.setattr(db_session, "commit", actual_commit)
     assert deliver(client, action).status_code == 200
     assert db_session.query(ActionApprovalModel).count() == 2
@@ -205,7 +205,7 @@ def test_continuation_commit_failure_rolls_back_next_ticket_and_retry_recovers(c
 def test_corrupted_link_or_digest_never_reaches_agent(client, db_session, monkeypatch):
     action = propose(client)
     confirm(client, action)
-    record = db_session.get(ActionApprovalModel, action["arguments"]["action_id"])
+    record = db_session.get(ActionApprovalModel, action["approval"]["action_id"])
     record.action_digest = "corrupt"
     db_session.commit()
     monkeypatch.setattr(agent_service, "process_turn", lambda *a, **kw: pytest.fail("unverified result reached P1"))
@@ -272,9 +272,9 @@ def test_concurrent_continuations_across_worker_locks_generate_one_next_ticket(r
         user = db.get(UserModel, "usr_demo_01")
         result = handle_chat(ChatInput(conversation_id="race_continuation",
             message="Cancel iQIYI VIP Monthly then transfer 45 CNY to Bob"), user=user, db=db)
-        args = result.actions[0].arguments
+        args = result.actions[0].approval.model_dump(mode="json")
         confirm_action(args["action_id"], ConfirmActionRequest(
-            confirmation_id="conf_race", action_digest=args["action_digest"]), user=user, db=db)
+            confirmation_id="conf_race", action_digest=args["action_digest"], idempotency_key="test_request"), user=user, db=db)
     # Separate processes do not share Python locks. Exercise only the DB guard.
     monkeypatch.setattr(continuation, "conversation_session", lambda key: nullcontext())
     actual = agent_service.process_turn

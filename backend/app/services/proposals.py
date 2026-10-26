@@ -1,5 +1,8 @@
 """Validate and ticket proposals from either a user turn or trusted continuation."""
-from contracts.models import ChatOutput, BankingContext
+import json
+
+from contracts.models import ActionProposal, BankingContext
+from app.api.schemas import AppChatOutput as ChatOutput, ApprovalMetadata, PresentedAction
 from contracts.enums import ActionStatus, ToolName
 from contracts.tool_schemas import validate_tool_arguments
 from app.services.actions import create_action_record
@@ -13,6 +16,7 @@ def present_proposals(chat_input, user, db, result, primary_acc):
   # 7. Otherwise: Mutation Action Proposals (Transfers & Cancellations)
   has_pending_actions = False
   pending_records = []
+  presented = []
   if result.proposals:
       if primary_acc is None:
           return ChatOutput(conversation_id=chat_input.conversation_id,
@@ -33,7 +37,7 @@ def present_proposals(chat_input, user, db, result, primary_acc):
               if proposal.tool == ToolName.REQUEST_SUBSCRIPTION_CANCEL:
                   args = validate_tool_arguments(proposal.tool, proposal.arguments)
                   cancellation_record(db, user.user_id, args.subscription_id, account_id)
-              action_record, digest, tier = create_action_record(
+              action_record, _, tier = create_action_record(
                   user_id=user.user_id,
                   proposal=proposal,
                   source_account_id=account_id,
@@ -44,12 +48,10 @@ def present_proposals(chat_input, user, db, result, primary_acc):
                   if not agent_service.use_mock:
                       action_record.conversation_id = chat_input.conversation_id
                   pending_records.append(action_record)
-                  proposal.arguments["action_id"] = action_record.action_id
-                  proposal.arguments["action_digest"] = digest
-                  proposal.arguments["tier"] = tier
+                  presented.append(present_action(proposal, action_record))
                   has_pending_actions = True
               else:
-                  proposal.arguments["tier"] = "GREEN"
+                  raise ValueError("Mutation requires an approval ticket")
 
           except ValueError as e:
               reason = getattr(e, "reason_code", "INVALID_TOOL_ARGUMENTS")
@@ -78,6 +80,58 @@ def present_proposals(chat_input, user, db, result, primary_acc):
   return ChatOutput(
       conversation_id=chat_input.conversation_id,
       reply=result.reply,
-      actions=result.proposals,
+      actions=presented,
       status=status,
   )
+
+
+def present_action(proposal, record):
+    """Build a separate output model, never modify P1's proposal or digest input."""
+    return PresentedAction(
+        **proposal.model_dump(mode="python"),
+        approval=ApprovalMetadata(action_id=record.action_id,
+            action_digest=record.action_digest, tier=record.tier, status=record.status),
+    )
+
+
+def restore_cached_chat(db, user_id, conversation_id, cached):
+    """Read old/new server caches using verified owned tickets, without calling P1.
+
+    Old caches placed three metadata fields inside arguments. Only this stored
+    response compatibility boundary removes them; incoming proposals remain strict.
+    Current ticket status/tier are returned even if the cached reply is older.
+    """
+    from fastapi import HTTPException
+    from app.db.models import ActionApprovalModel
+    from app.services.actions import compute_action_digest
+
+    if cached.get("conversation_id") != conversation_id:
+        raise HTTPException(409, "Cached conversation could not be verified")
+    restored = []
+    for item in cached.get("actions", []):
+        arguments = dict(item["arguments"])
+        metadata = item.get("approval")
+        if metadata is None:
+            metadata = {key: arguments.pop(key, None)
+                        for key in ("action_id", "action_digest", "tier")}
+        record = db.query(ActionApprovalModel).filter_by(
+            action_id=metadata.get("action_id"), user_id=user_id,
+            conversation_id=conversation_id, proposal_id=item["proposal_id"],
+            tool=item["tool"],
+        ).populate_existing().first()
+        if (record is None or metadata.get("action_digest") != record.action_digest
+            or compute_action_digest(record.tool, json.loads(record.payload_json)) != record.action_digest
+            or validate_tool_arguments(item["tool"], arguments).model_dump(mode="json") != json.loads(record.payload_json)):
+            raise HTTPException(409, "Cached follow-up approval could not be verified")
+        proposal = ActionProposal(proposal_id=item["proposal_id"], tool=item["tool"],
+                                  arguments=arguments, rationale=item.get("rationale", ""))
+        restored.append(present_action(proposal, record))
+    result = {**cached, "actions": restored}
+    if restored:
+        statuses = {item.approval.status for item in restored}
+        result["status"] = next(status for status in (
+            ActionStatus.PENDING_MFA, ActionStatus.PENDING_CONFIRMATION,
+            ActionStatus.FAILED, ActionStatus.REJECTED, ActionStatus.CANCELLED,
+            ActionStatus.COMPLETED,
+        ) if status in statuses)
+    return ChatOutput(**result)

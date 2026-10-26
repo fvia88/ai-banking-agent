@@ -12,10 +12,11 @@ from app.db.session import get_db
 from app.services.actions import compute_action_digest
 from app.services.adapters import agent_service
 from app.services.agent_context import trusted_agent_context
-from app.services.proposals import present_proposals
+from app.services.proposals import present_proposals, restore_cached_chat
+from app.api.schemas import AppChatOutput
 from app.services.session_store import (conversation_key, conversation_session,
     lock_conversation, set_conversation_state)
-from contracts.models import ChatInput, ChatOutput, ExecutionResult
+from contracts.models import ChatInput, ExecutionResult
 from contracts.tool_schemas import validate_tool_arguments
 
 router = APIRouter()
@@ -25,7 +26,7 @@ TERMINAL = {"COMPLETED", "FAILED", "REJECTED", "CANCELLED"}
 class ContinuationOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     execution: ExecutionResult
-    chat: ChatOutput
+    chat: AppChatOutput
 
 
 def owned_action(db, user_id, action_id):
@@ -51,7 +52,11 @@ def continue_action(action_id: str, user: UserModel = Depends(get_current_user),
             record = owned_action(db, user.user_id, action_id)
             status = record.status
             if record.continuation_status == status and record.continuation_json:
-                response = ContinuationOutput.model_validate_json(record.continuation_json)
+                cached = json.loads(record.continuation_json)
+                response = ContinuationOutput(execution=cached["execution"], chat=restore_cached_chat(
+                    db, user.user_id, conversation_id, cached["chat"],
+                ))
+                record.continuation_json = response.model_dump_json()
                 db.commit()
                 return response
             state = json.loads(row.state_json)

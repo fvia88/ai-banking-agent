@@ -30,24 +30,25 @@ def propose(client, db, clock):
     result = client.post("/api/v1/chat", json={"conversation_id": uuid4().hex, "message": "Transfer 500 CNY to Bob"})
     assert result.status_code == 200
     action = result.json()["actions"][0]
-    db.get(ActionApprovalModel, action["arguments"]["action_id"]).expires_at = clock["now"] + timedelta(minutes=10)
+    db.get(ActionApprovalModel, action["approval"]["action_id"]).expires_at = clock["now"] + timedelta(minutes=10)
     db.commit()
     return action
 
 
 def confirm(client, action):
-    return client.post(f'/api/v1/actions/{action["arguments"]["action_id"]}/confirm', json={
-        "confirmation_id": "daily_test", "action_digest": action["arguments"]["action_digest"],
+    return client.post(f'/api/v1/actions/{action["approval"]["action_id"]}/confirm', json={
+        "idempotency_key": "test_request",
+        "confirmation_id": "daily_test", "action_digest": action["approval"]["action_digest"],
     })
 
 
 def code(client, action):
     return next(row["code"] for row in client.get("/api/v1/demo/otp-inbox").json()
-                if row["action_id"] == action["arguments"]["action_id"])
+                if row["action_id"] == action["approval"]["action_id"])
 
 
 def verify(client, action, otp):
-    return client.post(f'/api/v1/actions/{action["arguments"]["action_id"]}/verify', json={"verification_code": otp})
+    return client.post(f'/api/v1/actions/{action["approval"]["action_id"]}/verify', json={"idempotency_key": "test_request", "verification_code": otp})
 
 
 def reset_count(db):
@@ -76,7 +77,7 @@ def test_old_total_is_read_as_zero_and_reset_atomically_on_execution(client, db_
     row.daily_transfer_date = date(2026, 10, 25)
     db_session.commit()
     action = propose(client, db_session, clock)
-    assert action["arguments"]["tier"] == "YELLOW"
+    assert action["approval"]["tier"] == "YELLOW"
     assert row.daily_transfer_total == Decimal("800.00")  # Proposal did not write a reset.
     assert confirm(client, action).json()["status"] == "COMPLETED"
     assert row.daily_transfer_date == date(2026, 10, 26)
@@ -91,7 +92,7 @@ def test_same_day_counter_is_preserved_and_requires_mfa(client, db_session, cloc
     row.daily_transfer_total = Decimal("800.00")
     db_session.commit()
     action = propose(client, db_session, clock)
-    assert action["arguments"]["tier"] == "RED"
+    assert action["approval"]["tier"] == "RED"
     assert confirm(client, action).json()["status"] == "PENDING_MFA"
     assert row.balance == Decimal("15250.00") and row.daily_transfer_total == Decimal("800.00")
     assert verify(client, action, code(client, action)).json()["status"] == "COMPLETED"

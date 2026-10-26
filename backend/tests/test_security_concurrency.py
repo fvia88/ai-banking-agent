@@ -114,7 +114,7 @@ def run_confirmations(sessions, actions, verify_codes=None):
             try:
                 user = db.get(UserModel, "race_user")
                 if verify_codes and action_id in verify_codes:
-                    result = verify_action(action_id, VerifyActionRequest(verification_code=verify_codes[action_id]), user=user, db=db)
+                    result = verify_action(action_id, VerifyActionRequest(verification_code=verify_codes[action_id], idempotency_key="test_request"), user=user, db=db)
                 else:
                     result = confirm_action(
                         action_id,
@@ -245,6 +245,7 @@ def issue_mfa(sessions, action):
     with sessions() as db:
         result = confirm_action(action_id, ConfirmActionRequest(
             confirmation_id="red_confirmation", action_digest=digest,
+            idempotency_key="test_request",
         ), user=db.get(UserModel, "race_user"), db=db)
         assert result.status.value == "PENDING_MFA"
         return db.get(ActionApprovalModel, action_id).verification_code

@@ -107,4 +107,4 @@ planner. Correlated mutation-result continuation and P1's bounded cancellation-t
 plan handoff are now connected; see `agent_continuation.md`. Approval
 concurrency now uses the guard described in `execution_safety.md`. Daily totals
 now use `daily_transfer_lifecycle.md`; broader safety-lock behavior remains separate work. The current frontend
-still uses its existing approval metadata transport.
+now uses the separate approval object described in `frontend_metadata_transport.md`.

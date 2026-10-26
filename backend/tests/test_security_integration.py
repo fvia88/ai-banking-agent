@@ -27,8 +27,8 @@ def proposed(client):
 
 
 def confirm(client, action):
-    return client.post(f'/api/v1/actions/{action["arguments"]["action_id"]}/confirm', json={
-        "confirmation_id": "confirm_test", "action_digest": action["arguments"]["action_digest"],
+    return client.post(f'/api/v1/actions/{action["approval"]["action_id"]}/confirm', json={
+        "confirmation_id": "confirm_test", "action_digest": action["approval"]["action_digest"],
         "idempotency_key": "security_test",
     })
 
@@ -64,7 +64,7 @@ def test_http_proposals_call_actual_policy_at_threshold(client, db_session, monk
     account(db_session).daily_transfer_total = Decimal(daily)
     db_session.commit()
     action = proposed(client)
-    assert action["arguments"]["tier"] == expected
+    assert action["approval"]["tier"] == expected
     assert len(calls) == 1
     proposal, context = calls[0]
     assert context.user_id == "usr_demo_01"
@@ -89,15 +89,15 @@ def test_two_pending_yellow_actions_escalate_after_first_executes(client, db_ses
     account(db_session).daily_transfer_total = Decimal("100.00")
     db_session.commit()
     first, second = proposed(client), proposed(client)
-    assert first["arguments"]["tier"] == second["arguments"]["tier"] == "YELLOW"
+    assert first["approval"]["tier"] == second["approval"]["tier"] == "YELLOW"
     assert confirm(client, first).json()["status"] == "COMPLETED"
     response = confirm(client, second)
     assert response.status_code == 200 and response.json()["status"] == "PENDING_MFA"
     assert calls[-1][1].daily_transfer_total == Decimal("600.00")
     assert account(db_session).balance == Decimal("14750.00")
-    action_id = second["arguments"]["action_id"]
+    action_id = second["approval"]["action_id"]
     code = next(m["code"] for m in client.get("/api/v1/demo/otp-inbox").json() if m["action_id"] == action_id)
-    verified = client.post(f"/api/v1/actions/{action_id}/verify", json={"verification_code": code})
+    verified = client.post(f"/api/v1/actions/{action_id}/verify", json={"idempotency_key": "test_request", "verification_code": code})
     assert verified.status_code == 200 and verified.json()["status"] == "COMPLETED"
     assert calls[-1][1].daily_transfer_total == Decimal("600.00")
     assert account(db_session).balance == Decimal("14250.00")
@@ -133,7 +133,7 @@ def test_invalid_agent_arguments_do_not_issue_tickets(client, db_session, monkey
 
 def test_stored_payload_tampering_blocks_execution(client, db_session):
     action = proposed(client)
-    record = db_session.get(ActionApprovalModel, action["arguments"]["action_id"])
+    record = db_session.get(ActionApprovalModel, action["approval"]["action_id"])
     payload = json.loads(record.payload_json)
     payload["amount"] = "999.00"
     record.payload_json = json.dumps(payload)
@@ -148,14 +148,14 @@ def test_policy_rejection_at_verify_cannot_be_overridden_by_correct_otp(client, 
     account(db_session).daily_transfer_total = Decimal("800.00")
     db_session.commit()
     assert confirm(client, action).json()["status"] == "PENDING_MFA"
-    action_id = action["arguments"]["action_id"]
+    action_id = action["approval"]["action_id"]
     code = client.get("/api/v1/demo/otp-inbox").json()[0]["code"]
     from security import policy
     monkeypatch.setattr(policy, "evaluate_action", lambda *a: PolicyDecision(
         tier=Tier.RED, allowed_to_proceed=False, requires_confirmation=False,
         requires_mfa=False, reason_code="POLICY_CHANGED",
     ))
-    response = client.post(f"/api/v1/actions/{action_id}/verify", json={"verification_code": code})
+    response = client.post(f"/api/v1/actions/{action_id}/verify", json={"idempotency_key": "test_request", "verification_code": code})
     assert response.status_code == 403 and "POLICY_CHANGED" in response.json()["detail"]
     assert db_session.get(ActionApprovalModel, action_id).mfa_consumed_at is None
     assert account(db_session).balance == Decimal("15250.00")
@@ -176,7 +176,7 @@ def test_real_p1_and_real_p4_transfer_roundtrip(client, db_session, monkeypatch)
     monkeypatch.setenv("AGENT_PROVIDER", "mock")
     calls = spy_on_p4(monkeypatch)
     action = proposed(client)
-    assert action["arguments"]["tier"] == "YELLOW"
+    assert action["approval"]["tier"] == "YELLOW"
     assert confirm(client, action).json()["status"] == "COMPLETED"
     assert len(calls) == 2
     assert account(db_session).balance == Decimal("14750.00")

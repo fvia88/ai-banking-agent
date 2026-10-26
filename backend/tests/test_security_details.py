@@ -22,8 +22,9 @@ def proposal(client):
 
 
 def confirm(client, action):
-    return client.post(f'/api/v1/actions/{action["arguments"]["action_id"]}/confirm', json={
-        "confirmation_id": "security_details", "action_digest": action["arguments"]["action_digest"],
+    return client.post(f'/api/v1/actions/{action["approval"]["action_id"]}/confirm', json={
+        "idempotency_key": "test_request",
+        "confirmation_id": "security_details", "action_digest": action["approval"]["action_digest"],
     })
 
 
@@ -45,17 +46,17 @@ def test_unset_flag_reaches_actual_p4_from_http(client, monkeypatch):
         return evaluate(proposed, context)
     monkeypatch.setattr(policy, "evaluate_action", spy)
     assert policy_service.use_mock is False
-    assert proposal(client)["arguments"]["tier"] == "YELLOW"
+    assert proposal(client)["approval"]["tier"] == "YELLOW"
     assert len(calls) == 1 and calls[0][1].user_id == "usr_demo_01"
 
 
 def test_escalation_audit_identifies_exact_transition_without_debit(client, db_session):
     action = proposal(client)
-    assert action["arguments"]["tier"] == "YELLOW"
+    assert action["approval"]["tier"] == "YELLOW"
     raise_daily_total(db_session)
     result = confirm(client, action)
     assert result.status_code == 200 and result.json()["status"] == "PENDING_MFA"
-    record = db_session.get(ActionApprovalModel, action["arguments"]["action_id"])
+    record = db_session.get(ActionApprovalModel, action["approval"]["action_id"])
     escalation, = events(db_session, "ESCALATED_TO_RED")
     challenge, = events(db_session, "MFA_CHALLENGE_ISSUED")
     assert record.status == "PENDING_MFA" and record.tier == "RED"
@@ -83,12 +84,12 @@ def test_repeated_confirmation_verification_and_replay_do_not_duplicate_escalati
     raise_daily_total(db_session)
     assert confirm(client, action).json()["status"] == "PENDING_MFA"
     assert confirm(client, action).status_code == 400
-    action_id = action["arguments"]["action_id"]
+    action_id = action["approval"]["action_id"]
     code = client.get("/api/v1/demo/otp-inbox").json()[0]["code"]
-    first = client.post(f"/api/v1/actions/{action_id}/verify", json={"verification_code": code}).json()
+    first = client.post(f"/api/v1/actions/{action_id}/verify", json={"idempotency_key": "test_request", "verification_code": code}).json()
     assert first["status"] == "COMPLETED"
     assert confirm(client, action).json()["audit_id"] == first["audit_id"]
-    assert client.post(f"/api/v1/actions/{action_id}/verify", json={"verification_code": code}).json()["audit_id"] == first["audit_id"]
+    assert client.post(f"/api/v1/actions/{action_id}/verify", json={"idempotency_key": "test_request", "verification_code": code}).json()["audit_id"] == first["audit_id"]
     assert len(events(db_session, "ESCALATED_TO_RED")) == len(events(db_session, "MFA_CHALLENGE_ISSUED")) == 1
     assert db_session.query(TransactionModel).filter_by(category="Transfers").count() == 1
 
@@ -104,7 +105,7 @@ def test_failed_challenge_commit_rolls_back_escalation_and_can_retry(client, db_
         confirm(client, action)
     monkeypatch.setattr(db_session, "commit", commit)
     db_session.expire_all()
-    record = db_session.get(ActionApprovalModel, action["arguments"]["action_id"])
+    record = db_session.get(ActionApprovalModel, action["approval"]["action_id"])
     assert record.status == "PENDING_CONFIRMATION" and record.tier == "YELLOW"
     assert record.verification_code is None and record.mfa_issued_at is None
     assert events(db_session, "ESCALATED_TO_RED") == events(db_session, "MFA_CHALLENGE_ISSUED") == []

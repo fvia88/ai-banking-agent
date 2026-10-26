@@ -24,13 +24,13 @@ def test_atomic_money_transfer_and_idempotency(client, db_session):
     }, headers={"X-Demo-User-Id": "usr_demo_01"})
     
     action = chat_resp.json()["actions"][0]
-    action_id = action["arguments"]["action_id"]
-    digest = action["arguments"]["action_digest"]
+    action_id = action["approval"]["action_id"]
+    digest = action["approval"]["action_digest"]
 
     # 3. Confirm transfer
     confirm_resp = client.post(
         f"/api/v1/actions/{action_id}/confirm",
-        json={"confirmation_id": "conf_exec_01", "action_digest": digest},
+        json={"idempotency_key": "test_request", "confirmation_id": "conf_exec_01", "action_digest": digest},
         headers={"X-Demo-User-Id": "usr_demo_01"}
     )
     assert confirm_resp.status_code == 200
@@ -48,7 +48,7 @@ def test_atomic_money_transfer_and_idempotency(client, db_session):
     # 4. T06 Idempotency Test: Repeat the SAME confirmation request
     replay_resp = client.post(
         f"/api/v1/actions/{action_id}/confirm",
-        json={"confirmation_id": "conf_exec_01", "action_digest": digest},
+        json={"idempotency_key": "test_request", "confirmation_id": "conf_exec_01", "action_digest": digest},
         headers={"X-Demo-User-Id": "usr_demo_01"}
     )
     assert replay_resp.status_code == 200

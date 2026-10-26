@@ -22,14 +22,15 @@ def propose(client):
 
 
 def confirm(client, action, digest=None):
-    return client.post(f'/api/v1/actions/{action["arguments"]["action_id"]}/confirm', json={
-        "confirmation_id": "confirm", "action_digest": digest or action["arguments"]["action_digest"],
+    return client.post(f'/api/v1/actions/{action["approval"]["action_id"]}/confirm', json={
+        "idempotency_key": "test_request",
+        "confirmation_id": "confirm", "action_digest": digest or action["approval"]["action_digest"],
     })
 
 
 def assert_no_execution(db, action, status):
     db.expire_all()
-    record = db.get(ActionApprovalModel, action["arguments"]["action_id"])
+    record = db.get(ActionApprovalModel, action["approval"]["action_id"])
     assert record.status == status and record.audit_id is None
     assert db.get(AccountModel, "acc_cny_001").balance == Decimal("15250.00")
     assert db.get(AccountModel, "acc_cny_001").daily_transfer_total == Decimal("0.00")
@@ -79,7 +80,7 @@ def test_commit_failure_retry_obeys_durable_action_state(client, db_session, mon
         confirm(client, action)
     monkeypatch.setattr(db_session, "commit", original_commit)
     db_session.expire_all()
-    record = db_session.get(ActionApprovalModel, action["arguments"]["action_id"])
+    record = db_session.get(ActionApprovalModel, action["approval"]["action_id"])
     assert record.status == ("COMPLETED" if commit_landed else "PENDING_CONFIRMATION")
     response = confirm(client, action)
     assert response.status_code == 200 and response.json()["status"] == "COMPLETED"
@@ -94,6 +95,6 @@ def test_bad_digest_cannot_change_completed_action(client, db_session):
     assert first["status"] == "COMPLETED"
     assert confirm(client, action, "wrong_digest").status_code == 400
     db_session.expire_all()
-    record = db_session.get(ActionApprovalModel, action["arguments"]["action_id"])
+    record = db_session.get(ActionApprovalModel, action["approval"]["action_id"])
     assert record.status == "COMPLETED" and record.audit_id == first["audit_id"]
     assert confirm(client, action).json()["audit_id"] == first["audit_id"]

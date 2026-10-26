@@ -1,8 +1,11 @@
 // frontend/src/App.tsx
 import { useState, useEffect, useRef } from 'react';
 import { fetchAccounts, fetchTransactions, sendChatMessage, confirmAction, verifyAction, continueAction, fetchSubscriptions, fetchStoredSubscriptions, fetchAuditLogs, fetchDemoInbox } from './api';
-import type { Account, Transaction, ChatMessage, SubscriptionCandidate, StoredSubscription, AuditEvent, DemoInboxMessage } from './api';
+import type { Account, Transaction, ChatMessage, ActionProposal, SubscriptionCandidate, StoredSubscription, AuditEvent, DemoInboxMessage } from './api';
 import { SubscriptionsPanel } from './SubscriptionsPanel';
+import { ApprovalCard } from './ApprovalCard';
+import type { ActionUiState } from './approvalState';
+import { mergeApprovalState } from './approvalState';
 
 export default function App() {
   // Banking data state
@@ -27,7 +30,7 @@ export default function App() {
   const deliveredUpdates = useRef(new Set<string>());
   const [continuationErrors, setContinuationErrors] = useState<Record<string, string>>({});
   const [actionStates, setActionStates] = useState<
-      Record<string, { status: string; message?: string; mfaCode?: string; error?: string; inboxMessage?: string }>
+      Record<string, ActionUiState>
     >({});
 
   async function loadData() {
@@ -57,6 +60,17 @@ export default function App() {
     loadData();
   }, []);
 
+  function rememberApprovals(actions: ActionProposal[]) {
+    if (!actions.length) return;
+    setActionStates(prev => {
+      const next = { ...prev };
+      for (const action of actions) {
+        next[action.approval.action_id] = mergeApprovalState(next[action.approval.action_id], action.approval);
+      }
+      return next;
+    });
+  }
+
   async function handleSend() {
     if (!inputMessage.trim() || sending) return;
 
@@ -69,6 +83,7 @@ export default function App() {
 
     try {
       const response = await sendChatMessage(userText);
+      rememberApprovals(response.actions);
       
       // Append AI response with any proposed actions
       setMessages((prev) => [
@@ -98,6 +113,7 @@ export default function App() {
       if (!update) return;
       setActionStates(prev => ({ ...prev, [actionId]: {
         ...prev[actionId], status: update.execution.status, message: update.execution.message,
+        tier: update.execution.status === 'PENDING_MFA' ? 'RED' : prev[actionId]?.tier,
       } }));
       if (update.execution.status === 'PENDING_MFA') {
         const inbox = await fetchDemoInbox().catch((): DemoInboxMessage[] => []);
@@ -106,6 +122,7 @@ export default function App() {
         } }));
       }
       const key = `${actionId}:${update.execution.status}`;
+      rememberApprovals(update.chat.actions);
       if (!deliveredUpdates.current.has(key)) {
         deliveredUpdates.current.add(key);
         setMessages(prev => [...prev, {
@@ -131,7 +148,7 @@ export default function App() {
       if (res.status === 'PENDING_MFA') {
         setActionStates((prev) => ({
           ...prev,
-          [actionId]: { status: 'PENDING_MFA', message: res.message, mfaCode: '' },
+          [actionId]: { status: 'PENDING_MFA', tier: 'RED', message: res.message, mfaCode: '' },
         }));
         // Simulated OTP delivery: show the code from the demo inbox
         const inbox = await fetchDemoInbox().catch((): DemoInboxMessage[] => []);
@@ -143,7 +160,7 @@ export default function App() {
       } else if (res.status === 'COMPLETED') {
         setActionStates((prev) => ({
           ...prev,
-          [actionId]: { status: 'COMPLETED', message: res.message },
+          [actionId]: { ...prev[actionId], status: 'COMPLETED', message: res.message },
         }));
         await loadData(); // Auto-refreshes balance!
       }
@@ -163,7 +180,7 @@ export default function App() {
       if (res.status === 'COMPLETED') {
         setActionStates((prev) => ({
           ...prev,
-          [actionId]: { status: 'COMPLETED', message: res.message },
+          [actionId]: { ...prev[actionId], status: 'COMPLETED', message: res.message },
         }));
         await loadData(); // Auto-refreshes balance!
       }
@@ -245,127 +262,15 @@ export default function App() {
                 {/* Render Proposed Action Cards if attached */}
                 {m.actions && m.actions.length > 0 && (
                   <div style={{ marginTop: '10px' }}>
-                    {m.actions.map((act, aIdx) => (
-                      <div
-                        key={aIdx}
-                        style={{
-                          background: '#fff',
-                          border: `2px solid ${act.arguments.tier === 'RED' ? '#d32f2f' : '#fbc02d'}`,
-                          borderRadius: '6px',
-                          padding: '10px',
-                          color: '#333',
-                          marginTop: '8px',
-                          fontSize: '13px',
-                        }}
-                      >
-                        <div>
-                          <strong>📋 Action:</strong> <code>{act.tool}</code>
-                          <span
-                            style={{
-                              marginLeft: '8px',
-                              padding: '2px 6px',
-                              borderRadius: '4px',
-                              background: act.arguments.tier === 'RED' ? '#ffebee' : '#fffde7',
-                              color: act.arguments.tier === 'RED' ? '#d32f2f' : '#f57f17',
-                              fontWeight: 'bold',
-                            }}
-                          >
-                            Tier: {act.arguments.tier || 'YELLOW'}
-                          </span>
-                        </div>
-
-                        {act.arguments.amount && (
-                          <div style={{ marginTop: '4px' }}>
-                            <strong>Amount:</strong> {act.arguments.amount} {act.arguments.currency}
-                          </div>
-                        )}
-                        {act.arguments.recipient_id && (
-                          <div>
-                            <strong>Recipient:</strong> <code>{act.arguments.recipient_id}</code>
-                          </div>
-                        )}
-                        {act.arguments.subscription_id && (
-                          <div>
-                            <strong>Subscription ID:</strong> <code>{act.arguments.subscription_id}</code>
-                          </div>
-                        )}
-                        {act.arguments.action_id && (
-                          <div style={{ color: '#777', fontSize: '11px', marginTop: '4px' }}>
-                            Ticket ID: <code>{act.arguments.action_id}</code>
-                            {act.arguments.action_id && act.arguments.action_digest && (
-                              <div style={{ marginTop: '8px', paddingTop: '6px', borderTop: '1px dashed #ccc' }}>
-                                {/* 1. Confirm Button (Shown if not confirmed yet) */}
-                                {(!actionStates[act.arguments.action_id] || actionStates[act.arguments.action_id].status === 'PENDING_CONFIRMATION') && (
-                              <button
-                                onClick={() => handleConfirm(act.arguments.action_id!, act.arguments.action_digest!)}
-                                style={{ padding: '4px 10px', background: '#2e7d32', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
-                              >
-                                ✅ Confirm & Execute
-                              </button>
-                            )}
-
-                            {/* 2. MFA Input (Shown if Red tier) */}
-                            {actionStates[act.arguments.action_id]?.status === 'PENDING_MFA' && (
-                              <div style={{ background: '#fff3e0', padding: '6px', borderRadius: '4px' }}>
-                                <div style={{ background: '#fff', border: '1px dashed #e65100', padding: '6px', borderRadius: '4px', marginBottom: '6px' }}>
-                                  <small style={{ fontWeight: 'bold' }}>📨 Demo inbox (simulated, no SMS/email sent)</small>
-                                  <div><small>{actionStates[act.arguments.action_id]?.inboxMessage || 'No code yet. Check the backend console.'}</small></div>
-                                </div>
-                                <small style={{ color: '#e65100', fontWeight: 'bold' }}>🔒 Enter the OTP code from your demo inbox:</small>
-                                <div style={{ display: 'flex', gap: '4px', marginTop: '4px' }}>
-                                  <input
-                                    type="text"
-                                    placeholder="6-digit code"
-                                    value={actionStates[act.arguments.action_id]?.mfaCode || ''}
-                                    onChange={(e) => {
-                                      const val = e.target.value;
-                                      setActionStates((prev) => ({
-                                        ...prev,
-                                        [act.arguments.action_id!]: { ...prev[act.arguments.action_id!], mfaCode: val, error: undefined },
-                                      }));
-                                    }}
-                                    style={{ padding: '4px', width: '100px' }}
-                                  />
-                                  <button
-                                    onClick={() => handleVerify(act.arguments.action_id!, actionStates[act.arguments.action_id!]?.mfaCode || '')}
-                                    style={{ padding: '4px 8px', background: '#d32f2f', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
-                                  >
-                                    Verify
-                                  </button>
-                                </div>
-                                {actionStates[act.arguments.action_id]?.error && (
-                                  <small style={{ color: '#c62828' }}>⚠️ {actionStates[act.arguments.action_id]?.error}</small>
-                                )}
-                              </div>
-                            )}
-
-                            {/* 3. Completed Badge */}
-                            {actionStates[act.arguments.action_id]?.status === 'COMPLETED' && (
-                              <div style={{ color: '#2e7d32', fontWeight: 'bold' }}>
-                                🎉 {actionStates[act.arguments.action_id]?.message || 'Executed successfully!'}
-                              </div>
-                            )}
-
-                            {/* Terminal refusal is distinct from notification failure. */}
-                            {['FAILED', 'REJECTED', 'CANCELLED'].includes(actionStates[act.arguments.action_id]?.status) && (
-                              <div style={{ color: '#c62828', fontWeight: 'bold' }}>
-                                ❌ {actionStates[act.arguments.action_id]?.message || actionStates[act.arguments.action_id]?.error || 'Failed.'}
-                              </div>
-                            )}
-                            {actionStates[act.arguments.action_id]?.status === 'PENDING_CONFIRMATION' && actionStates[act.arguments.action_id]?.error && (
-                              <div style={{ color: '#c62828' }}>{actionStates[act.arguments.action_id]?.error}</div>
-                            )}
-                            {continuationErrors[act.arguments.action_id] && (
-                              <div>
-                                <small>{continuationErrors[act.arguments.action_id]}</small>{' '}
-                                <button onClick={() => updateConversation(act.arguments.action_id!)}>Retry conversation update</button>
-                              </div>
-                            )}
-                          </div>
-                        )}
-                          </div>
-                        )}
-                      </div>
+                    {m.actions.map(act => (
+                      <ApprovalCard key={act.approval.action_id} action={act}
+                        state={actionStates[act.approval.action_id]}
+                        continuationError={continuationErrors[act.approval.action_id]}
+                        onConfirm={handleConfirm} onVerify={handleVerify} onRetry={updateConversation}
+                        onCodeChange={(actionId, code) => setActionStates(prev => ({
+                          ...prev, [actionId]: { ...prev[actionId],
+                            status: prev[actionId]?.status ?? act.approval.status, mfaCode: code, error: undefined },
+                        }))} />
                     ))}
                   </div>
                 )}

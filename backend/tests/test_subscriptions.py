@@ -61,10 +61,10 @@ def test_t07_cancel_subscription_yellow_tier_and_execution(client):
     
     action = chat_data["actions"][0]
     assert action["tool"] == ToolName.REQUEST_SUBSCRIPTION_CANCEL.value
-    assert action["arguments"]["tier"] == "YELLOW"  # Must be YELLOW tier per spec
+    assert action["approval"]["tier"] == "YELLOW"  # Must be YELLOW tier per spec
     
-    action_id = action["arguments"]["action_id"]
-    digest = action["arguments"]["action_digest"]
+    action_id = action["approval"]["action_id"]
+    digest = action["approval"]["action_digest"]
 
     # 2. Confirm the cancellation action
     confirm_resp = client.post(

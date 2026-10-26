@@ -44,13 +44,13 @@ def _red_action_pending_mfa(client, db_session, conversation_id):
         "message": "Transfer 500 CNY to Bob"
     }, headers=ALICE)
     action = chat_resp.json()["actions"][0]
-    action_id = action["arguments"]["action_id"]
-    assert action["arguments"]["tier"] == "RED"
+    action_id = action["approval"]["action_id"]
+    assert action["approval"]["tier"] == "RED"
     assert _balance(db_session) == START_BALANCE  # no debit after chat
 
     confirm_resp = client.post(
         f"/api/v1/actions/{action_id}/confirm",
-        json={"confirmation_id": f"conf_{conversation_id}", "action_digest": action["arguments"]["action_digest"]},
+        json={"idempotency_key": "test_request", "confirmation_id": f"conf_{conversation_id}", "action_digest": action["approval"]["action_digest"]},
         headers=ALICE
     )
     assert confirm_resp.status_code == 200
@@ -76,7 +76,7 @@ def _wrong_code(action_id):
 
 def _verify(client, action_id, code=None, headers=ALICE):
     code = code if code is not None else _issued_codes[action_id]
-    return client.post(f"/api/v1/actions/{action_id}/verify", json={"verification_code": code}, headers=headers)
+    return client.post(f"/api/v1/actions/{action_id}/verify", json={"idempotency_key": "test_request", "verification_code": code}, headers=headers)
 
 
 def test_red_transfer_debits_once_only_after_valid_mfa(client, db_session):
@@ -386,7 +386,7 @@ def test_truly_concurrent_verifies_debit_once(tmp_path, monkeypatch):
         try:
             user = session.query(UserModel).filter(UserModel.user_id == "usr_demo_01").first()
             result = approvals.verify_action(
-                "act_race", approvals.VerifyActionRequest(verification_code=issued_code),
+                "act_race", approvals.VerifyActionRequest(verification_code=issued_code, idempotency_key="test_request"),
                 user=user, db=session,
             )
             outcomes.append(("ok", result.status))

@@ -54,7 +54,8 @@ Cancellation never credits the balance. Paused plans do not advance automaticall
 If policy refuses a dependent proposal, P1 receives that refusal and stops the
 remaining plan; no unticketed proposal is left waiting for an impossible approval.
 General planning, external merchant cancellation and broader takeover requirements
-remain outside this change. Frontend metadata still uses the existing transport.
+remain outside this change. Frontend approval metadata now uses a separate
+`approval` object; see `frontend_metadata_transport.md`, including old-cache handling.
 
 ## Manual checks
 

@@ -32,10 +32,9 @@ policy decision even with a correct OTP. Insufficient funds remain enforced by
 the transfer executor, since P4 currently classifies risk rather than checking
 sufficient funds.
 
-The current UI still receives action_id/action_digest/tier inside the response
-proposal's arguments for compatibility. These tracking fields are added only
-after policy evaluation; execution-time checks use the clean stored payload.
-Separating UI metadata into a coordinated contract remains future work.
+The UI now receives action_id/action_digest/tier/status in a separate `approval`
+object. Both response arguments and stored payloads stay canonical; see
+`frontend_metadata_transport.md` for the P2 HTTP schema and rollout instructions.
 
 ## Verification and remaining work
 

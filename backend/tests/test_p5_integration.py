@@ -31,8 +31,9 @@ def proposal(client):
 
 
 def confirm(client, action):
-    return client.post(f'/api/v1/actions/{action["arguments"]["action_id"]}/confirm', json={
-        "confirmation_id": "p5_confirmation", "action_digest": action["arguments"]["action_digest"],
+    return client.post(f'/api/v1/actions/{action["approval"]["action_id"]}/confirm', json={
+        "idempotency_key": "test_request",
+        "confirmation_id": "p5_confirmation", "action_digest": action["approval"]["action_digest"],
     })
 
 
@@ -126,7 +127,7 @@ def test_cancellation_is_confirmed_persisted_and_does_not_credit_savings(client,
     monkeypatch.setattr(mapping, "assess_cancellation", eligible)
     before = db_session.query(TransactionModel).count()
     action = proposal(client)
-    assert action["arguments"]["tier"] == "YELLOW"
+    assert action["approval"]["tier"] == "YELLOW"
     assert db_session.get(SubscriptionModel, "sub_iQIYI_01").status == "active"
     first = confirm(client, action)
     assert first.status_code == 200 and first.json()["status"] == "COMPLETED"
@@ -228,7 +229,7 @@ def test_stale_rejection_cannot_overwrite_completed_action(client, db_session, m
     from app.api import approvals
     from app.services.subscriptions import SubscriptionUnavailable
     action = proposal(client)
-    action_id = action["arguments"]["action_id"]
+    action_id = action["approval"]["action_id"]
     def completed_elsewhere(*args, **kwargs):
         # Model a completion becoming visible after this request loaded its
         # pending action snapshot but before it sees the cancelled subscription.

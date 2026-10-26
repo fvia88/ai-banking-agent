@@ -3,7 +3,8 @@ from datetime import datetime
 import json
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-from contracts.models import ChatInput, ChatOutput, BankingContext
+from contracts.models import ChatInput, BankingContext
+from app.api.schemas import AppChatOutput as ChatOutput
 from contracts.enums import ActionStatus, Direction, ToolName
 from app.api.deps import get_current_user
 from app.db.session import get_db

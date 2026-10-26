@@ -2,7 +2,7 @@
 import uuid
 import json
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from contracts.api_schemas import ConfirmActionRequest, VerifyActionRequest
 from sqlalchemy.orm import Session
 from contracts.enums import ActionStatus, Tier, ToolName
 from contracts.models import ExecutionResult, ActionProposal, BankingContext
@@ -117,14 +117,6 @@ def _execute_action(db: Session, user: UserModel, record: ActionApprovalModel) -
         status_code=status.HTTP_400_BAD_REQUEST,
         detail=f"Unsupported action tool '{record.tool}'. Refusing to execute."
     )
-
-class ConfirmActionRequest(BaseModel):
-    confirmation_id: str
-    action_digest: str
-    idempotency_key: str | None = None
-
-class VerifyActionRequest(BaseModel):
-    verification_code: str
 
 @router.post("/actions/{action_id}/confirm", response_model=ExecutionResult)
 def confirm_action(
