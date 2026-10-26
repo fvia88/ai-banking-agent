@@ -73,12 +73,10 @@ commit failure before durability, acknowledgement loss after durability and bad
 digest replay against a completed action. These supplement existing P3 recovery,
 P4 policy and P5 cancellation checks.
 
-The combined offline run produced 731 passed and one pre-existing failure:
-`test_mode_selection_is_explicit`. The merged adapter and another bridge test
-default to mock security when USE_MOCK_SECURITY is absent, while this test expects
-real security. That separate configuration disagreement was reproduced before
-this execution change and remains unresolved. Docker explicitly defaults to real
-security via USE_MOCK_SECURITY=false.
+At the execution-safety checkpoint the offline run produced 731 passes and one
+pre-existing security-default test failure. That disagreement is now resolved:
+local code and Compose default to real P4. The later full suite passed all 756
+tests; see `security_defaults_and_audit.md` for current evidence.
 
 To run race checks, use the commands in `concurrency_reproduction.md`. Set
 MIGRATION_TEST_POSTGRES_ADMIN_URL to a disposable PostgreSQL server's admin URL
@@ -101,8 +99,8 @@ new migration is needed. No app container was rebuilt during verification.
 
 Calendar-based daily-total lifecycle is now implemented; see
 `daily_transfer_lifecycle.md` for its migration, locking and boundary tests.
-Still separate work: explicit ESCALATED_TO_RED
-audit events, agreement on security-mode defaults, frontend conflict/retry and
+Explicit ESCALATED_TO_RED auditing and security-mode defaults are now completed;
+see `security_defaults_and_audit.md`. Still separate work: frontend conflict/retry and
 metadata transport, and trusted mutation-result continuation to P1. Broader failure
 and recovery acceptance should include deployment/network fault scenarios, beyond
 the simulated commit and executor failures covered here.

@@ -219,6 +219,9 @@ def test_competing_yellow_actions_cannot_bypass_cumulative_mfa(race_database):
         violations.append("No second debit may occur before MFA")
     if sorted(row["status"] for row in evidence["actions"]) != ["COMPLETED", "PENDING_MFA"]:
         violations.append("Stored statuses must reflect one completion and one MFA challenge")
+    with race_database() as db:
+        assert db.query(AuditLogModel).filter_by(action_type="ESCALATED_TO_RED").count() == 1
+        assert db.query(AuditLogModel).filter_by(action_type="MFA_CHALLENGE_ISSUED").count() == 1
     assert_safe(evidence, violations)
 
 

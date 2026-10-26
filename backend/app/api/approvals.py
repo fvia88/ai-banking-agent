@@ -182,8 +182,18 @@ def _confirm_locked_action(payload, user, db, record):
     # A stale Yellow proposal can become Red after another completed transfer.
     # Never downgrade a previously approved Red requirement.
     if record.tier == Tier.RED.value or decision.requires_mfa or decision.tier == Tier.RED:
+        previous_tier = record.tier
         record.tier = Tier.RED.value
         mfa.issue_challenge(record, now)
+        if previous_tier == Tier.YELLOW.value:
+            db.add(AuditLogModel(
+                audit_id=f"aud_{uuid.uuid4().hex[:10]}", action_id=record.action_id,
+                user_id=user.user_id, action_type="ESCALATED_TO_RED",
+                payload_digest=record.action_digest, reason_code=decision.reason_code,
+                created_at=now,
+                details=json.dumps({"previous_tier": previous_tier, "new_tier": Tier.RED.value,
+                                    "trigger": "confirmation_policy_recheck"}),
+            ))
         audit_id = f"aud_{uuid.uuid4().hex[:10]}"
         db.add(AuditLogModel(
             audit_id=audit_id,

@@ -3,9 +3,9 @@
 The backend can call `security.policy.evaluate_action(proposal, context)` through
 the real adapter. No changes to P4's module or frozen contracts are required.
 
-`USE_MOCK_SECURITY=false` selects real P4 (the default in Compose). The merged
-local adapter defaults to mock when unset; the conflicting default expectations
-in tests still need agreement, so set this variable explicitly for local runs.
+`USE_MOCK_SECURITY=false` selects real P4 and is the default in both local code
+and Compose. The default expectations in the bridge and integration tests now
+agree. See `security_defaults_and_audit.md` for the final behavior and evidence.
 `USE_MOCK_SECURITY=true` explicitly selects the P2 mock for isolated demos. A
 failed real evaluator import is not silently replaced with a mock. P1 provider
 selection is independent: real P1 with `AGENT_PROVIDER=mock` can exercise real P4
@@ -66,6 +66,5 @@ docker compose up -d --build
 ```
 
 Local users restart `python backend/start.py --reload` with
-`USE_MOCK_SECURITY=false` explicitly (the merged local default currently selects
-mock when unset). No database migration is introduced
+`USE_MOCK_SECURITY=false` or leave it unset to use real P4. No database migration is introduced
 by this policy integration.

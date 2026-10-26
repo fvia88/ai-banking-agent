@@ -80,9 +80,11 @@ PostgreSQL: only one 600 CNY transfer completes before MFA and only one reset au
 is stored. Migration tests verify legacy totals/balances are preserved and repeat
 upgrades are safe on both databases.
 
-The combined offline run recorded 749 passed and the pre-existing security-mode
-default test failure. PostgreSQL used disposable databases in a separate test
-container; the running banking_db and its volume were not modified.
+At the daily-lifecycle checkpoint, the offline run recorded 749 passes and a
+pre-existing security-default test failure. That conflict has since been resolved;
+the later full suite passed 756 tests (see `security_defaults_and_audit.md`).
+PostgreSQL used disposable databases in a separate test container; the running
+banking_db and its volume were not modified.
 
 The real frontend cannot simulate tomorrow without changing the server clock.
 Use these controlled tests instead of changing your computer clock or manually
