@@ -143,7 +143,7 @@ def test_agent_clean_payload_and_proposal_binding(client, db_session):
     
     assert chat_resp.status_code == 200
     action = chat_resp.json()["actions"][0]
-    action_id = action["arguments"]["action_id"]
+    action_id = action["approval"]["action_id"]
 
     # Query the database record directly
     record = db_session.query(ActionApprovalModel).filter(ActionApprovalModel.action_id == action_id).first()

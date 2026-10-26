@@ -30,12 +30,12 @@ def fixture_context() -> BankingContext:
 
 
 def test_security_adapter_environment_and_default_selection(monkeypatch):
-    """Verifies default mock mode, valid case-insensitive USE_MOCK_SECURITY values, and overrides."""
+    """Real P4 is the default; case-insensitive flags and explicit overrides remain supported."""
     assert isinstance(policy_service, SecurityAdapterService)
 
     monkeypatch.delenv("USE_MOCK_SECURITY", raising=False)
     default_adapter = SecurityAdapterService()
-    assert default_adapter.use_mock is True
+    assert default_adapter.use_mock is False
 
     for false_val in ("false", "FALSE", "False", "fAlSe"):
         monkeypatch.setenv("USE_MOCK_SECURITY", false_val)
@@ -440,8 +440,8 @@ def test_http_chat_real_p1_agent_with_real_p4_policy_end_to_end(
     assert calls[0].reason_code == SecurityReasonCode.TRANSFER_WITHIN_DAILY_LIMIT
 
     action = chat_body["actions"][0]
-    action_id = action["arguments"]["action_id"]
-    digest = action["arguments"]["action_digest"]
+    action_id = action["approval"]["action_id"]
+    digest = action["approval"]["action_digest"]
 
     confirm_res = client.post(
         f"/api/v1/actions/{action_id}/confirm",

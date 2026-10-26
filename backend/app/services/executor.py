@@ -7,6 +7,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 from app.db.models import UserModel, AccountModel, TransactionModel, ActionApprovalModel, AuditLogModel, SubscriptionModel
 from app.services.subscriptions import cancellation_record, SubscriptionUnavailable
+from app.services import daily_transfers
 
 def execute_transfer(
     db: Session,
@@ -22,6 +23,9 @@ def execute_transfer(
     5. Writes to immutable Audit log
     """
     payload = json.loads(record.payload_json)
+    execution_time = db.info.get(daily_transfers.EXECUTION_TIME_KEY)
+    if execution_time is None:
+        raise RuntimeError("Transfer execution requires the guarded daily policy check")
     amount = Decimal(str(payload["amount"]))
     source_acc_id = payload.get("source_account_id")
     recipient_id = payload.get("recipient_id", "Unknown Recipient")
@@ -30,7 +34,7 @@ def execute_transfer(
     account = db.query(AccountModel).filter(
         AccountModel.account_id == source_acc_id,
         AccountModel.user_id == user.user_id
-    ).first()
+    ).with_for_update().populate_existing().first()
 
     if not account:
         raise HTTPException(
@@ -50,7 +54,9 @@ def execute_transfer(
     account.daily_transfer_total += amount
 
     # 3. Create official ledger transaction
-    now_iso = datetime.now(timezone.utc).isoformat()
+    # Use the same authoritative instant as the locked policy check, even if
+    # midnight passes between validation and the ledger write.
+    now_iso = execution_time.astimezone(timezone.utc).isoformat()
     tx_id = f"tx_{uuid.uuid4().hex[:10]}"
     tx_record = TransactionModel(
         transaction_id=tx_id,

@@ -48,6 +48,19 @@ are accepted. Alembic records the applied revision in `alembic_version`.
 missing known records only for existing owned demo/fixture accounts, preserving
 cancelled state and financial data. See `p5_integration.md` for scope and APIs.
 
+`0004_transfer_day` dates account-level daily transfer counters in Asia/Shanghai.
+
+`0005_agent_continuation` persists owner-scoped P1 conversation state and adds
+nullable action-to-conversation links plus cached status delivery. Existing
+financial data and unlinked approvals are preserved. See `agent_continuation.md`.
+
+`0006_safety_lock` adds owner-wide verification-failure counters and automatic-lock
+provenance to users. Existing lock values and financial data are preserved.
+Activated locks survive restart until a reviewed local reset; see `safety_lock.md`.
+It preserves legacy amounts and initializes missing dates to the upgrade day;
+those totals expire at the next Shanghai day boundary. See
+`daily_transfer_lifecycle.md` for lazy rollover, atomic accounting and tests.
+
 The older `001_add_mfa_lifecycle.sql` is retained as a manual repair reference;
 automatic startup uses the Python revisions, not that SQL file. No manual stamp
 or database reset is required for the supported existing schemas.

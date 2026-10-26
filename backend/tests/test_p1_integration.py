@@ -135,9 +135,9 @@ def test_real_transfer_invalid_answer_retains_bob_and_canonical_proposal(client)
     assert len(pending) == 1
     assert pending[0]['proposal']['arguments'] == dict(source_account_id='acc_cny_001',
         recipient_id='usr_bob_01', amount='500.00', currency='CNY')
-    # Current UI still receives metadata in a response copy. It must not pollute
-    # the canonical original proposal used to validate later tool results.
-    assert 'action_id' in final['actions'][0]['arguments']
+    # Server metadata is separate in both HTTP output and P1's saved snapshot.
+    assert 'action_id' not in final['actions'][0]['arguments']
+    assert 'action_id' in final['actions'][0]['approval']
     post_chat(client, 'p1_transfer_memory', 'Transfer to Bob')
     discarded = post_chat(client, 'p1_transfer_memory', 'Never mind!')
     assert discarded['reply'] == 'Unfinished request discarded.'
@@ -232,8 +232,8 @@ def test_real_agent_transfer_proposal_and_execution(client, db_session):
     assert action["arguments"]["recipient_id"] == "usr_bob_01"
     assert action["arguments"]["amount"] == "500.00"
 
-    action_id = action["arguments"]["action_id"]
-    digest = action["arguments"]["action_digest"]
+    action_id = action["approval"]["action_id"]
+    digest = action["approval"]["action_digest"]
 
     # Confirm the transfer
     confirm_res = client.post(

@@ -105,7 +105,9 @@ def test_chat_creates_server_action_record(client, db_session):
     assert data["status"] == "PENDING_CONFIRMATION"
     assert len(data["actions"]) == 1
     
-    action_args = data["actions"][0]["arguments"]
-    assert "action_id" in action_args
-    assert "action_digest" in action_args
-    assert len(action_args["action_digest"]) == 64  # Valid SHA-256 length
+    action = data["actions"][0]
+    approval = action["approval"]
+    assert "action_id" not in action["arguments"]
+    assert "action_digest" not in action["arguments"]
+    assert approval["action_id"]
+    assert len(approval["action_digest"]) == 64  # Valid SHA-256 length

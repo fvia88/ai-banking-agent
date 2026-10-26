@@ -12,13 +12,13 @@ def test_confirm_yellow_action_completes_successfully(client):
     }, headers={"X-Demo-User-Id": "usr_demo_01"})
     
     action = chat_resp.json()["actions"][0]
-    action_id = action["arguments"]["action_id"]
-    digest = action["arguments"]["action_digest"]
+    action_id = action["approval"]["action_id"]
+    digest = action["approval"]["action_digest"]
 
     # 2. Confirm the action
     confirm_resp = client.post(
         f"/api/v1/actions/{action_id}/confirm",
-        json={"confirmation_id": "conf_001", "action_digest": digest},
+        json={"idempotency_key": "test_request", "confirmation_id": "conf_001", "action_digest": digest},
         headers={"X-Demo-User-Id": "usr_demo_01"}
     )
     assert confirm_resp.status_code == 200
@@ -34,12 +34,12 @@ def test_confirm_with_tampered_digest_fails(client):
         "message": "Transfer 500 CNY to Bob"
     }, headers={"X-Demo-User-Id": "usr_demo_01"})
     
-    action_id = chat_resp.json()["actions"][0]["arguments"]["action_id"]
+    action_id = chat_resp.json()["actions"][0]["approval"]["action_id"]
 
     # Attempt to confirm with a bogus digest
     confirm_resp = client.post(
         f"/api/v1/actions/{action_id}/confirm",
-        json={"confirmation_id": "conf_002", "action_digest": "fake_tampered_hash_123"},
+        json={"idempotency_key": "test_request", "confirmation_id": "conf_002", "action_digest": "fake_tampered_hash_123"},
         headers={"X-Demo-User-Id": "usr_demo_01"}
     )
     assert confirm_resp.status_code == 400
@@ -59,14 +59,14 @@ def test_t03_red_tier_flow_requires_mfa_and_completes(client, db_session):
     }, headers={"X-Demo-User-Id": "usr_demo_01"})
     
     action = chat_resp.json()["actions"][0]
-    action_id = action["arguments"]["action_id"]
-    digest = action["arguments"]["action_digest"]
-    assert action["arguments"]["tier"] == "RED"
+    action_id = action["approval"]["action_id"]
+    digest = action["approval"]["action_digest"]
+    assert action["approval"]["tier"] == "RED"
 
     # 3. Confirm the action -> Expect PENDING_MFA
     confirm_resp = client.post(
         f"/api/v1/actions/{action_id}/confirm",
-        json={"confirmation_id": "conf_red", "action_digest": digest},
+        json={"idempotency_key": "test_request", "confirmation_id": "conf_red", "action_digest": digest},
         headers={"X-Demo-User-Id": "usr_demo_01"}
     )
     assert confirm_resp.status_code == 200
@@ -77,7 +77,7 @@ def test_t03_red_tier_flow_requires_mfa_and_completes(client, db_session):
     code = next(m["code"] for m in inbox if m["action_id"] == action_id)
     verify_resp = client.post(
         f"/api/v1/actions/{action_id}/verify",
-        json={"verification_code": code},
+        json={"idempotency_key": "test_request", "verification_code": code},
         headers={"X-Demo-User-Id": "usr_demo_01"}
     )
     assert verify_resp.status_code == 200
@@ -97,28 +97,28 @@ def test_mfa_rate_limit_locks_after_three_failed_attempts(client, db_session):
     }, headers={"X-Demo-User-Id": "usr_demo_01"})
     
     action = chat_resp.json()["actions"][0]
-    action_id = action["arguments"]["action_id"]
-    digest = action["arguments"]["action_digest"]
+    action_id = action["approval"]["action_id"]
+    digest = action["approval"]["action_digest"]
 
     # Confirm to transition to PENDING_MFA
     client.post(
         f"/api/v1/actions/{action_id}/confirm",
-        json={"confirmation_id": "conf_rate", "action_digest": digest},
+        json={"idempotency_key": "test_request", "confirmation_id": "conf_rate", "action_digest": digest},
         headers={"X-Demo-User-Id": "usr_demo_01"}
     )
 
     # Attempt 1: Wrong code
-    resp1 = client.post(f"/api/v1/actions/{action_id}/verify", json={"verification_code": "000000"}, headers={"X-Demo-User-Id": "usr_demo_01"})
+    resp1 = client.post(f"/api/v1/actions/{action_id}/verify", json={"idempotency_key": "test_request", "verification_code": "000000"}, headers={"X-Demo-User-Id": "usr_demo_01"})
     assert resp1.status_code == 400
     assert "2 attempt(s) remaining" in resp1.json()["detail"]
 
     # Attempt 2: Wrong code
-    resp2 = client.post(f"/api/v1/actions/{action_id}/verify", json={"verification_code": "111111"}, headers={"X-Demo-User-Id": "usr_demo_01"})
+    resp2 = client.post(f"/api/v1/actions/{action_id}/verify", json={"idempotency_key": "test_request", "verification_code": "111111"}, headers={"X-Demo-User-Id": "usr_demo_01"})
     assert resp2.status_code == 400
     assert "1 attempt(s) remaining" in resp2.json()["detail"]
 
     # Attempt 3: Wrong code -> Action should fail and lock
-    resp3 = client.post(f"/api/v1/actions/{action_id}/verify", json={"verification_code": "222222"}, headers={"X-Demo-User-Id": "usr_demo_01"})
+    resp3 = client.post(f"/api/v1/actions/{action_id}/verify", json={"idempotency_key": "test_request", "verification_code": "222222"}, headers={"X-Demo-User-Id": "usr_demo_01"})
     assert resp3.status_code == 400
     assert "FAILED" in resp3.json()["detail"]
 
@@ -130,8 +130,8 @@ def test_confirm_with_explicit_idempotency_key(client):
     }, headers={"X-Demo-User-Id": "usr_demo_01"})
     
     action = chat_resp.json()["actions"][0]
-    action_id = action["arguments"]["action_id"]
-    digest = action["arguments"]["action_digest"]
+    action_id = action["approval"]["action_id"]
+    digest = action["approval"]["action_digest"]
 
     # Confirm with both confirmation_id and idempotency_key
     confirm_resp = client.post(

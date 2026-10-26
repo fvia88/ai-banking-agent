@@ -46,7 +46,10 @@ def run_to(engine, revision):
 def snapshot(engine):
     with engine.connect() as connection:
         return {
-            table: connection.execute(sa.text(f'SELECT * FROM "{table}"')).all()
+            table: connection.execute(sa.text('SELECT ' + ', '.join(
+                '"' + column["name"] + '"' for column in sa.inspect(connection).get_columns(table)
+                if column["name"] not in {"daily_transfer_date", "security_failure_count", "security_failure_window_at", "safety_locked_at", "safety_lock_reason"}
+            ) + f' FROM "{table}"')).all()
             for table in ("users", "accounts", "transactions", "audit_logs")
         }
 
@@ -65,8 +68,8 @@ def test_upgrade_preserves_data_and_repeats(migration_engine, schema):
                     connection.execute(sa.text(f"ALTER TABLE action_approvals ADD COLUMN {name} TIMESTAMP"))
                 connection.execute(sa.text("ALTER TABLE action_approvals ADD COLUMN audit_id VARCHAR(64)"))
     with engine.begin() as connection:
-        connection.execute(sa.text("INSERT INTO users VALUES ('u', 'Preserve me', false, '2026-10-24')"))
-        connection.execute(sa.text("INSERT INTO accounts VALUES ('a', 'u', '123', 'CNY', 123.45, 20.00, '2026-10-24')"))
+        connection.execute(sa.text("INSERT INTO users (user_id, username, is_locked, created_at) VALUES ('u', 'Preserve me', false, '2026-10-24')"))
+        connection.execute(sa.text("INSERT INTO accounts (account_id, user_id, account_number, currency, balance, daily_transfer_total, created_at) VALUES ('a', 'u', '123', 'CNY', 123.45, 20.00, '2026-10-24')"))
         connection.execute(sa.text("INSERT INTO transactions VALUES ('t', 'a', '2026-10-24T00:00:00+00:00', 20.00, 'debit', 'Bob', 'Transfers')"))
         connection.execute(sa.text("INSERT INTO audit_logs VALUES ('aud', 'act', 'u', 'TRANSFER', 'digest', 'OK', 'Keep audit', '2026-10-24')"))
         connection.execute(sa.text("""INSERT INTO action_approvals
@@ -79,12 +82,17 @@ def test_upgrade_preserves_data_and_repeats(migration_engine, schema):
     upgrade_database(engine)
     assert snapshot(engine) == before
     with engine.connect() as connection:
-        assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "0003_subscriptions"
+        assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "0006_safety_lock"
+        assert connection.scalar(sa.text("SELECT daily_transfer_date FROM accounts WHERE account_id='a'")) is not None
         assert connection.execute(sa.text("SELECT status, mfa_issued_at, mfa_expires_at, mfa_consumed_at, audit_id FROM action_approvals")).one() == ("COMPLETED", None, None, None, None)
     # Full ORM select previously failed when even one mapped column was absent.
     with sa.orm.Session(engine) as session:
         from app.db.models import ActionApprovalModel
         assert session.get(ActionApprovalModel, "act").status == "COMPLETED"
+        from app.db.models import UserModel
+        user = session.get(UserModel, "u")
+        assert user.security_failure_count == 0 and user.safety_locked_at is None
+        assert user.safety_lock_reason is None and user.security_failure_window_at is None
 
 
 def test_fresh_database_matches_current_models(migration_engine):
@@ -127,11 +135,9 @@ def test_previous_head_upgrade_and_restart_preserve_subscription_state(migration
     from decimal import Decimal
     run_to(migration_engine, "0002_mfa_lifecycle")
     sessions = sessionmaker(bind=migration_engine)
-    with sessions() as db:
-        db.add(UserModel(user_id="usr_demo_01", username="Alice", is_locked=False))
-        db.add(AccountModel(account_id="acc_cny_001", user_id="usr_demo_01", account_number="preserve",
-                            balance=Decimal("987.65"), daily_transfer_total=Decimal("123.00")))
-        db.commit()
+    with migration_engine.begin() as connection:
+        connection.execute(sa.text("INSERT INTO users (user_id, username, is_locked, created_at) VALUES ('usr_demo_01', 'Alice', false, '2026-10-24')"))
+        connection.execute(sa.text("INSERT INTO accounts (account_id, user_id, account_number, currency, balance, daily_transfer_total, created_at) VALUES ('acc_cny_001', 'usr_demo_01', 'preserve', 'CNY', 987.65, 123.00, '2026-10-24')"))
     monkeypatch.setattr(seed, "engine", migration_engine)
     monkeypatch.setattr(seed, "SessionLocal", sessions)
     seed.seed_database()
@@ -159,3 +165,45 @@ def test_fresh_startup_seeds_owned_subscription_records(migration_engine, monkey
         assert db.get(SubscriptionModel, "sub_streambox").account_id == "account_001"
         assert db.get(SubscriptionModel, "sub_cloudmusic").cancellation_supported is False
         assert db.get(SubscriptionModel, "sub_iQIYI_01").account_id == "acc_cny_001"
+
+
+def test_transfer_day_upgrade_preserves_existing_money(migration_engine):
+    from datetime import datetime, timedelta, timezone
+    from decimal import Decimal
+    from sqlalchemy.orm import Session
+    from app.db.models import AccountModel
+    run_to(migration_engine, "0003_subscriptions")
+    with migration_engine.begin() as connection:
+        connection.execute(sa.text("INSERT INTO users (user_id, username, is_locked, created_at) VALUES ('u', 'Old counter', false, '2026-10-24')"))
+        connection.execute(sa.text("INSERT INTO accounts VALUES ('a', 'u', 'old', 'CNY', 987.65, 1800.00, '2026-10-24')"))
+    upgrade_database(migration_engine)
+    upgrade_database(migration_engine)
+    with Session(migration_engine) as db:
+        row = db.get(AccountModel, "a")
+        assert row.balance == Decimal("987.65") and row.daily_transfer_total == Decimal("1800.00")
+        assert row.daily_transfer_date == datetime.now(timezone(timedelta(hours=8))).date()
+
+
+def test_safety_lock_survives_seed_restart(migration_engine, monkeypatch):
+    from datetime import datetime, timezone
+    from sqlalchemy.orm import sessionmaker
+    from app.db import seed
+    from app.db.models import UserModel
+    sessions = sessionmaker(bind=migration_engine)
+    monkeypatch.setattr(seed, "engine", migration_engine)
+    monkeypatch.setattr(seed, "SessionLocal", sessions)
+    seed.seed_database()
+    with sessions() as db:
+        user = db.get(UserModel, "usr_demo_01")
+        user.is_locked = True
+        user.security_failure_count = 3
+        user.safety_lock_reason = "REPEATED_VERIFICATION_FAILURES"
+        user.safety_locked_at = datetime.now(timezone.utc)
+        user.security_failure_window_at = user.safety_locked_at
+        db.commit()
+    seed.seed_database()
+    with sessions() as db:
+        user = db.get(UserModel, "usr_demo_01")
+        assert user.is_locked and user.security_failure_count == 3
+        assert user.safety_lock_reason == "REPEATED_VERIFICATION_FAILURES"
+        assert user.safety_locked_at is not None and user.security_failure_window_at is not None

@@ -45,27 +45,41 @@ export async function fetchTransactions(): Promise<TransactionsResponse> {
   return res.json();
 }
 
-export interface ActionProposal {
-  proposal_id: string;
-  tool: string;
-  arguments: {
-    action_id?: string;
-    action_digest?: string;
-    tier?: 'YELLOW' | 'RED' | 'GREEN';
-    recipient_id?: string;
-    amount?: string;
-    currency?: string;
-    subscription_id?: string;
-    [key: string]: any;
-  };
-  rationale?: string;
+export type ActionStatus = 'PROPOSED' | 'PENDING_CONFIRMATION' | 'PENDING_MFA' | 'COMPLETED' | 'REJECTED' | 'FAILED' | 'CANCELLED';
+export type ApprovalTier = 'YELLOW' | 'RED';
+
+export interface ApprovalMetadata {
+  action_id: string;
+  action_digest: string;
+  tier: ApprovalTier;
+  status: ActionStatus;
 }
+
+interface TransferArguments {
+  source_account_id: string;
+  recipient_id: string;
+  amount: string;
+  currency: 'CNY';
+}
+
+interface CancellationArguments {
+  subscription_id: string;
+}
+
+export type ActionProposal = {
+  proposal_id: string;
+  approval: ApprovalMetadata;
+  rationale?: string;
+} & (
+  | { tool: 'request_transfer'; arguments: TransferArguments }
+  | { tool: 'request_subscription_cancel'; arguments: CancellationArguments }
+);
 
 export interface ChatOutput {
   conversation_id: string;
   reply: string;
   actions: ActionProposal[];
-  status: string;
+  status: ActionStatus;
 }
 
 export interface ChatMessage {
@@ -95,16 +109,71 @@ export async function sendChatMessage(
 
 export interface ExecutionResult {
   action_id: string;
-  status: string;
+  status: ActionStatus;
   message: string;
   audit_id: string;
+}
+
+export interface ConfirmActionRequest {
+  confirmation_id: string;
+  action_digest: string;
+  idempotency_key: string;
+}
+
+export interface VerifyActionRequest {
+  verification_code: string;
+  idempotency_key: string;
+}
+
+export interface CancelApprovalRequest {
+  action_digest: string;
+  idempotency_key: string;
+}
+
+export async function fetchActionStatus(actionId: string): Promise<ApprovalMetadata> {
+  const res = await fetch(`/api/v1/actions/${encodeURIComponent(actionId)}`, {
+    headers: { 'X-Demo-User-Id': DEMO_USER_ID },
+  });
+  if (!res.ok) throw new Error('Could not retrieve the bank status for this approval');
+  return res.json();
+}
+
+export async function cancelAction(actionId: string, digest: string): Promise<ExecutionResult> {
+  const res = await fetch(`/api/v1/actions/${encodeURIComponent(actionId)}/cancel`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Demo-User-Id': DEMO_USER_ID },
+    body: JSON.stringify({ action_digest: digest, idempotency_key: `cancel_${actionId}` } satisfies CancelApprovalRequest),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || 'Cancellation could not be applied');
+  }
+  return res.json();
+}
+
+export interface ContinuationOutput {
+  execution: ExecutionResult;
+  chat: ChatOutput;
+}
+
+export async function continueAction(actionId: string): Promise<ContinuationOutput | null> {
+  const res = await fetch(`/api/v1/actions/${encodeURIComponent(actionId)}/continue`, {
+    method: 'POST', headers: { 'X-Demo-User-Id': DEMO_USER_ID },
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    // Mock and pre-migration tickets retain their ordinary approval UI.
+    if (res.status === 409 && data.detail === 'This action has no real-agent conversation link') return null;
+    throw new Error(data.detail || 'Conversation update unavailable');
+  }
+  return res.json();
 }
 
 export async function confirmAction(
   actionId: string,
   digest: string
 ): Promise<ExecutionResult> {
-  const res = await fetch(`/api/v1/actions/${actionId}/confirm`, {
+  const res = await fetch(`/api/v1/actions/${encodeURIComponent(actionId)}/confirm`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -114,7 +183,7 @@ export async function confirmAction(
       confirmation_id: `conf_${Date.now()}`,
       action_digest: digest,
       idempotency_key: `idemp_${Date.now()}`,
-    }),
+    } satisfies ConfirmActionRequest),
   });
   if (!res.ok) {
     const errData = await res.json().catch(() => ({}));
@@ -127,7 +196,7 @@ export async function verifyAction(
   actionId: string,
   code: string
 ): Promise<ExecutionResult> {
-  const res = await fetch(`/api/v1/actions/${actionId}/verify`, {
+  const res = await fetch(`/api/v1/actions/${encodeURIComponent(actionId)}/verify`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -136,7 +205,7 @@ export async function verifyAction(
     body: JSON.stringify({
       verification_code: code,
       idempotency_key: `idemp_verify_${Date.now()}`,
-    }),
+    } satisfies VerifyActionRequest),
   });
   if (!res.ok) {
     const errData = await res.json().catch(() => ({}));
