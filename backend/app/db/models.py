@@ -1,7 +1,8 @@
 # backend/app/db/models.py
 from datetime import datetime, timezone
 from decimal import Decimal
-from sqlalchemy import Column, String, Boolean, Numeric, DateTime, ForeignKey, Text
+from sqlalchemy import Column, String, Boolean, Integer, Numeric, Date, DateTime, ForeignKey, Text
+from app.services.daily_transfers import banking_day
 from sqlalchemy.orm import relationship
 from app.db.session import Base
 
@@ -11,6 +12,10 @@ class UserModel(Base):
     user_id = Column(String(64), primary_key=True)
     username = Column(String(100), nullable=False)
     is_locked = Column(Boolean, default=False, nullable=False)
+    security_failure_count = Column(Integer, default=0, server_default="0", nullable=False)
+    security_failure_window_at = Column(DateTime, nullable=True)
+    safety_locked_at = Column(DateTime, nullable=True)
+    safety_lock_reason = Column(String(64), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
     accounts = relationship("AccountModel", back_populates="user", cascade="all, delete-orphan")
@@ -24,6 +29,7 @@ class AccountModel(Base):
     currency = Column(String(3), default="CNY", nullable=False)
     balance = Column(Numeric(18, 2), default=Decimal("0.00"), nullable=False)
     daily_transfer_total = Column(Numeric(18, 2), default=Decimal("0.00"), nullable=False)
+    daily_transfer_date = Column(Date, default=lambda: banking_day(), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
     user = relationship("UserModel", back_populates="accounts")
@@ -87,4 +93,15 @@ class ActionApprovalModel(Base):
     mfa_issued_at = Column(DateTime, nullable=True)
     mfa_expires_at = Column(DateTime, nullable=True)
     mfa_consumed_at = Column(DateTime, nullable=True)
-    audit_id = Column(String(64), nullable=True)  # Execution audit entry, returned on idempotent replay
+    audit_id = Column(String(64), nullable=True)  # Execution or explicit cancellation audit, returned on replay
+    conversation_id = Column(String(128), nullable=True)
+    continuation_status = Column(String(32), nullable=True)
+    continuation_json = Column(Text, nullable=True)
+
+
+class ConversationModel(Base):
+    __tablename__ = "agent_conversations"
+
+    user_id = Column(String(64), primary_key=True)
+    conversation_id = Column(String(128), primary_key=True)
+    state_json = Column(Text, nullable=False)

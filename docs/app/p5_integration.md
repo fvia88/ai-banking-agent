@@ -102,7 +102,9 @@ and confirmation, no balance credit and safe repeated cancellation. Migration
 tests exercise fresh and older SQLite/PostgreSQL databases and startup using
 new sessions, preserving cancelled state and existing financial data.
 
-This does not add renewal reminders, real merchant cancellation, a general task
-planner or a correlated mutation-result continuation back into P1. Transfer
-concurrency, daily-total reset and broader safety-lock behavior remain separate
-work. The current frontend still uses its existing approval metadata transport.
+This does not add renewal reminders, real merchant cancellation, or a general task
+planner. Correlated mutation-result continuation and P1's bounded cancellation-then-transfer
+plan handoff are now connected; see `agent_continuation.md`. Approval
+concurrency now uses the guard described in `execution_safety.md`. Daily totals
+now use `daily_transfer_lifecycle.md`; repeated-failure safety locks use `safety_lock.md`. The current frontend
+now uses the separate approval object described in `frontend_metadata_transport.md`.

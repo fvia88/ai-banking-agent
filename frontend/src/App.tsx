@@ -1,10 +1,20 @@
 // frontend/src/App.tsx
-import { useState, useEffect } from 'react';
-import { fetchAccounts, fetchTransactions, sendChatMessage, confirmAction, verifyAction, fetchSubscriptions, fetchStoredSubscriptions, fetchAuditLogs, fetchDemoInbox } from './api';
-import type { Account, Transaction, ChatMessage, SubscriptionCandidate, StoredSubscription, AuditEvent, DemoInboxMessage } from './api';
+import { useState, useEffect, useRef } from 'react';
+import { fetchAccounts, fetchTransactions, sendChatMessage, confirmAction, verifyAction, cancelAction, fetchActionStatus, continueAction, fetchSubscriptions, fetchStoredSubscriptions, fetchAuditLogs, fetchDemoInbox } from './api';
+import type { Account, Transaction, ChatMessage, ActionProposal, SubscriptionCandidate, StoredSubscription, AuditEvent, DemoInboxMessage } from './api';
 import { SubscriptionsPanel } from './SubscriptionsPanel';
+import { ApprovalCard } from './ApprovalCard';
+import type { ActionUiState } from './approvalState';
+import { mergeApprovalState } from './approvalState';
+import { Icon } from './Icon';
+import banklyLogo from './assets/bankly.png';
+import './App.css';
 
 export default function App() {
+  const [view, setView] = useState<'chat' | 'transactions' | 'subscriptions' | 'audit'>('chat');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const composer = useRef<HTMLTextAreaElement>(null);
+  const messageEnd = useRef<HTMLDivElement>(null);
   // Banking data state
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -19,13 +29,17 @@ export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       sender: 'agent',
-      text: 'Hello Alice! I am your Banking AI Assistant. How can I assist with your bills, transfers, or subscriptions today?',
+      text: 'Hi Alice, I’m bank.ly (帮客力). I can help you understand your spending, check your balance, manage subscriptions, and prepare transfers.',
     },
   ]);
   const [inputMessage, setInputMessage] = useState<string>('');
   const [sending, setSending] = useState<boolean>(false);
+  const deliveredUpdates = useRef(new Set<string>());
+  const inFlightActions = useRef(new Set<string>());
+  const [busyActions, setBusyActions] = useState<Record<string, boolean>>({});
+  const [continuationErrors, setContinuationErrors] = useState<Record<string, string>>({});
   const [actionStates, setActionStates] = useState<
-      Record<string, { status: string; message?: string; mfaCode?: string; error?: string; inboxMessage?: string }>
+      Record<string, ActionUiState>
     >({});
 
   async function loadData() {
@@ -55,6 +69,17 @@ export default function App() {
     loadData();
   }, []);
 
+  function rememberApprovals(actions: ActionProposal[]) {
+    if (!actions.length) return;
+    setActionStates(prev => {
+      const next = { ...prev };
+      for (const action of actions) {
+        next[action.approval.action_id] = mergeApprovalState(next[action.approval.action_id], action.approval);
+      }
+      return next;
+    });
+  }
+
   async function handleSend() {
     if (!inputMessage.trim() || sending) return;
 
@@ -67,6 +92,7 @@ export default function App() {
 
     try {
       const response = await sendChatMessage(userText);
+      rememberApprovals(response.actions);
       
       // Append AI response with any proposed actions
       setMessages((prev) => [
@@ -90,6 +116,81 @@ export default function App() {
     }
   }
 
+  async function updateConversation(actionId: string) {
+    try {
+      const update = await continueAction(actionId);
+      if (!update) return;
+      setActionStates(prev => ({ ...prev, [actionId]: {
+        ...prev[actionId], status: update.execution.status, message: update.execution.message,
+        tier: update.execution.status === 'PENDING_MFA' ? 'RED' : prev[actionId]?.tier,
+      } }));
+      if (update.execution.status === 'PENDING_MFA') {
+        const inbox = await fetchDemoInbox().catch((): DemoInboxMessage[] => []);
+        setActionStates(prev => ({ ...prev, [actionId]: {
+          ...prev[actionId], inboxMessage: inbox.find(m => m.action_id === actionId)?.message,
+        } }));
+      }
+      const key = `${actionId}:${update.execution.status}`;
+      rememberApprovals(update.chat.actions);
+      if (!deliveredUpdates.current.has(key)) {
+        deliveredUpdates.current.add(key);
+        setMessages(prev => [...prev, {
+          sender: 'agent', text: update.chat.reply, actions: update.chat.actions,
+        }]);
+      }
+      setContinuationErrors(prev => {
+        const next = { ...prev }; delete next[actionId]; return next;
+      });
+    } catch {
+      // The bank transaction already has its own committed outcome. A failed
+      // agent notification must never turn a successful transfer into "failed".
+      setContinuationErrors(prev => ({ ...prev,
+        [actionId]: 'Conversation update unavailable. Retry to retrieve the bank status and notify the agent.',
+      }));
+    }
+  }
+
+  async function runAction(actionId: string, operation: () => Promise<void>) {
+    if (inFlightActions.current.has(actionId)) return;
+    inFlightActions.current.add(actionId);
+    setBusyActions(prev => ({ ...prev, [actionId]: true }));
+    try {
+      await operation();
+    } finally {
+      inFlightActions.current.delete(actionId);
+      setBusyActions(prev => ({ ...prev, [actionId]: false }));
+    }
+  }
+
+  async function handleCancel(actionId: string, digest: string) {
+    try {
+      const result = await cancelAction(actionId, digest);
+      setActionStates(prev => ({ ...prev, [actionId]: {
+        ...prev[actionId], status: result.status, message: result.message,
+        mfaCode: undefined, inboxMessage: undefined, error: undefined,
+      } }));
+    } catch (err: unknown) {
+      const error = err instanceof Error ? err.message : 'Cancellation could not be applied';
+      try {
+        // A confirmation may have won the race, or the cancellation response
+        // may have been lost after commit. Read bank state before labelling it.
+        const approval = await fetchActionStatus(actionId);
+        setActionStates(prev => ({ ...prev, [actionId]: {
+          ...mergeApprovalState(prev[actionId], approval),
+          message: approval.status === 'CANCELLED' ? 'Approval is cancelled. This ticket can no longer execute.'
+            : approval.status === 'COMPLETED' ? 'The bank completed this action; cancellation was not applied.' : undefined,
+          error: approval.status === 'CANCELLED' ? undefined : error,
+        } }));
+      } catch {
+        setActionStates(prev => ({ ...prev, [actionId]: { ...prev[actionId],
+          error: 'Cancellation outcome could not be verified. Retry cancellation to retrieve the bank outcome.',
+        } }));
+      }
+    }
+    await loadData();
+    await updateConversation(actionId);
+  }
+
   // handle clicking confirm
   async function handleConfirm(actionId: string, digest: string) {
     try {
@@ -97,7 +198,7 @@ export default function App() {
       if (res.status === 'PENDING_MFA') {
         setActionStates((prev) => ({
           ...prev,
-          [actionId]: { status: 'PENDING_MFA', message: res.message, mfaCode: '' },
+          [actionId]: { status: 'PENDING_MFA', tier: 'RED', message: res.message, mfaCode: '' },
         }));
         // Simulated OTP delivery: show the code from the demo inbox
         const inbox = await fetchDemoInbox().catch((): DemoInboxMessage[] => []);
@@ -109,16 +210,18 @@ export default function App() {
       } else if (res.status === 'COMPLETED') {
         setActionStates((prev) => ({
           ...prev,
-          [actionId]: { status: 'COMPLETED', message: res.message },
+          [actionId]: { ...prev[actionId], status: 'COMPLETED', message: res.message },
         }));
         await loadData(); // Auto-refreshes balance!
       }
     } catch (err: unknown) {
       setActionStates((prev) => ({
         ...prev,
-        [actionId]: { status: 'FAILED', error: err instanceof Error ? err.message : 'Failed' },
+        [actionId]: { ...prev[actionId], status: prev[actionId]?.status || 'PENDING_CONFIRMATION', error: err instanceof Error ? err.message : 'Failed' },
       }));
+      await loadData();
     }
+    await updateConversation(actionId);
   }
 
   // handle entering the MFA code
@@ -128,7 +231,7 @@ export default function App() {
       if (res.status === 'COMPLETED') {
         setActionStates((prev) => ({
           ...prev,
-          [actionId]: { status: 'COMPLETED', message: res.message },
+          [actionId]: { ...prev[actionId], status: 'COMPLETED', message: res.message },
         }));
         await loadData(); // Auto-refreshes balance!
       }
@@ -137,288 +240,149 @@ export default function App() {
         ...prev,
         [actionId]: { ...prev[actionId], error: err instanceof Error ? err.message : 'Invalid code' },
       }));
+      await loadData();
     }
+    await updateConversation(actionId);
   }
 
+  useEffect(() => {
+    if (view === 'chat') messageEnd.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, [messages, sending, view]);
+
+  function navigate(next: typeof view) {
+    setView(next);
+    setSidebarOpen(false);
+  }
+
+  function draftMessage(text: string) {
+    navigate('chat');
+    setInputMessage(text);
+    requestAnimationFrame(() => composer.current?.focus());
+  }
+
+  function money(amount: string | number, currency = 'CNY') {
+    const value = Number(amount);
+    return Number.isFinite(value)
+      ? new Intl.NumberFormat('en', { style: 'currency', currency, currencyDisplay: 'code' }).format(value)
+      : `${amount} ${currency}`;
+  }
+
+  const navigation = [
+    { id: 'chat', label: 'AI assistant', icon: 'chat' },
+    { id: 'transactions', label: 'Transactions', icon: 'activity' },
+    { id: 'subscriptions', label: 'Subscriptions', icon: 'repeat' },
+    { id: 'audit', label: 'Activity & audit', icon: 'shield' },
+  ] as const;
+  const currentView = navigation.find(item => item.id === view)!;
+  const locked = accounts.some(account => account.locked);
+
   return (
-    <div style={{ padding: '24px', fontFamily: 'sans-serif', maxWidth: '850px', margin: '0 auto' }}>
-      <h2>🏦 AI Banking Agent Dashboard</h2>
-      <p>
-        <strong>Current User:</strong> Alice Wang (<code>usr_demo_01</code>)
-        <button onClick={loadData} style={{ marginLeft: '16px', padding: '4px 12px', cursor: 'pointer' }}>
-          🔄 Refresh Balances
-        </button>
-      </p>
-      {loading && <p style={{ color: '#666', fontStyle: 'italic' }}>⏳ Loading live data from bank vault...</p>}
-
-      {error && (
-        <div style={{ padding: '12px', background: '#ffebee', color: '#c62828', borderRadius: '4px', marginBottom: '16px' }}>
-          <strong>Error:</strong> {error}
+    <div className="bankly-app">
+      {sidebarOpen && <button className="sidebar-backdrop" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} />}
+      <aside className={`sidebar ${sidebarOpen ? 'sidebar-open' : ''}`} aria-label="Main navigation">
+        <a className="brand" href="#assistant" onClick={event => { event.preventDefault(); navigate('chat'); }}>
+          <img className="brand-logo" src={banklyLogo} alt="bank.ly mascot logo" />
+          <span><strong>bank<span className="brand-blue">.ly</span></strong><span className="brand-chinese" lang="zh">帮客力</span></span>
+        </a>
+        <button className="mobile-close icon-button" aria-label="Close navigation" onClick={() => setSidebarOpen(false)}><Icon name="close" /></button>
+        <div className="workspace-label">YOUR WORKSPACE</div>
+        <nav className="navigation">
+          {navigation.map(item => <button key={item.id} className={`nav-item ${view === item.id ? 'is-active' : ''}`} aria-current={view === item.id ? 'page' : undefined} onClick={() => navigate(item.id)}>
+            <Icon name={item.icon} /><span>{item.label}</span>{item.id === 'chat' && <span className="nav-tag">AI</span>}
+          </button>)}
+        </nav>
+        <div className="sidebar-balance">
+          <div className="balance-label"><Icon name="wallet" /><span>Your accounts</span><button className="icon-button" onClick={loadData} disabled={loading} aria-label="Refresh balances and banking data"><Icon name="refresh" className={loading ? 'is-spinning' : ''} width="15" height="15" /></button></div>
+          {accounts.map(account => <div className="sidebar-account" key={account.account_id}>
+            <strong>{money(account.balance, account.currency)}</strong>
+            <div className="account-caption"><span className={`status-dot ${account.locked ? 'dot-warning' : ''}`} />{account.locked ? 'Account locked' : 'Available balance'}</div>
+            <details className="account-details"><summary>Account details</summary><code>{account.account_id}</code></details>
+          </div>)}
+          {!accounts.length && <p className="muted">{loading ? 'Loading accounts…' : 'No accounts available'}</p>}
         </div>
-      )}
+        <div className="sidebar-note"><Icon name="shield" width="17" height="17" /><p>You stay in control.<br /><span>Review every financial action.</span></p></div>
+        <div className="profile"><span className="profile-avatar">AW</span><div><strong>Alice Wang</strong><span>Demo account</span></div><span className="demo-label">DEMO</span></div>
+      </aside>
 
-      {/* Account Balance Card */}
-      <section style={{ marginBottom: '24px' }}>
-        <h3>💳 Bank Accounts</h3>
-        {accounts.map((acc) => (
-          <div
-            key={acc.account_id}
-            style={{
-              border: '2px solid #2e7d32',
-              borderRadius: '8px',
-              padding: '16px',
-              background: '#f1f8e9',
-            }}
-          >
-            <strong>Account:</strong> <code>{acc.account_id}</code> | <strong>Status:</strong>{' '}
-            {acc.locked ? '🔒 Locked' : '✅ Active'}
-            <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#1b5e20', marginTop: '6px' }}>
-              {acc.balance} {acc.currency}
+      <main className="main-workspace">
+        <header className="workspace-header">
+          <div className="header-title"><button className="mobile-menu icon-button" aria-label="Open navigation" aria-expanded={sidebarOpen} onClick={() => setSidebarOpen(true)}><Icon name="menu" /></button><span>{currentView.label}</span>{view === 'chat' && <span className="header-version">bank.ly <span lang="zh">帮客力</span></span>}</div>
+          <span className={`workspace-badge ${locked ? 'badge-warning' : ''}`}><span className={`status-dot ${locked ? 'dot-warning' : ''}`} />{locked ? 'Safety lock active' : 'Demo workspace'}</span>
+        </header>
+
+        {error && <div className="app-notice notice-error" role="alert"><span>{error}</span><button onClick={loadData} className="text-button">Try again</button></div>}
+        {locked && <div className="app-notice notice-warning" role="alert"><Icon name="lock" /><span>Transfers and subscription cancellations are locked. Read-only queries remain available. A demo operator must review and reset an automatic safety lock before new actions can proceed.</span></div>}
+
+        <section className="chat-view" hidden={view !== 'chat'} aria-label="Conversation with bank.ly">
+          <div className="chat-scroll" role="log" aria-label="Chat messages" aria-live="polite" aria-relevant="additions">
+            <div className="conversation-content">
+              {messages.length === 1 ? <div className="welcome">
+                <img className="welcome-logo" src={banklyLogo} alt="bank.ly 帮客力" />
+                <span className="eyebrow">A LITTLE CLARITY FOR YOUR MONEY</span>
+                <h1>Good to see you, Alice<span className="brand-blue">.</span></h1>
+                <p>Your money, made simpler. Ask bank.ly to check a balance,<br className="desktop-break" /> make sense of spending, or prepare your next transfer.</p>
+                <div className="suggestion-grid">
+                  {[
+                    { icon: 'wallet', label: 'Check my balance', detail: 'A clear picture of your account', prompt: 'What is my balance?' },
+                    { icon: 'activity', label: 'Understand my spending', detail: 'See where your money goes', prompt: 'Analyze my spending' },
+                    { icon: 'repeat', label: 'Review subscriptions', detail: 'Explore recurring charges', prompt: 'List my subscriptions' },
+                    { icon: 'arrow', label: 'Prepare a transfer', detail: 'You review before anything moves', prompt: 'Transfer to Bob' },
+                  ].map(item => <button className="suggestion" key={item.label} onClick={() => draftMessage(item.prompt)}><Icon name={item.icon as 'wallet' | 'activity' | 'repeat' | 'arrow'} /><strong>{item.label}</strong><span>{item.detail}</span></button>)}
+                </div>
+              </div> : messages.map((message, index) => <article key={index} className={`message message-${message.sender}`}>
+                {message.sender === 'agent' && <div className="assistant-avatar" aria-hidden="true"><img src={banklyLogo} alt="" /></div>}
+                <div className="message-body">
+                  {message.sender === 'agent' && <div className="message-author">bank.ly <span lang="zh">帮客力</span></div>}
+                  <div className="message-text">{message.text}</div>
+                  {message.actions?.map(action => <ApprovalCard key={action.approval.action_id} action={action}
+                    state={actionStates[action.approval.action_id]}
+                    continuationError={continuationErrors[action.approval.action_id]}
+                    busy={busyActions[action.approval.action_id]}
+                    onConfirm={(id, digest) => runAction(id, () => handleConfirm(id, digest))}
+                    onCancel={(id, digest) => runAction(id, () => handleCancel(id, digest))}
+                    onVerify={(id, code) => runAction(id, () => handleVerify(id, code))}
+                    onRetry={id => runAction(id, () => updateConversation(id))}
+                    onCodeChange={(actionId, code) => setActionStates(prev => ({
+                      ...prev, [actionId]: { ...prev[actionId],
+                        status: prev[actionId]?.status ?? action.approval.status, mfaCode: code, error: undefined },
+                    }))} />)}
+                </div>
+              </article>)}
+              {sending && <div className="thinking" role="status"><span /><span /><span /><span className="thinking-label">bank.ly is thinking</span></div>}
+              <div ref={messageEnd} />
             </div>
           </div>
-        ))}
-      </section>
-
-      {/* Chat Section */}
-      <section style={{ border: '1px solid #ccc', borderRadius: '8px', padding: '16px', marginBottom: '24px', background: '#fafafa' }}>
-        <h3>💬 AI Banking Assistant</h3>
-        
-        {/* Messages Feed */}
-        <div style={{ minHeight: '220px', maxHeight: '380px', overflowY: 'auto', marginBottom: '16px', padding: '8px', background: '#fff', border: '1px solid #eee', borderRadius: '4px' }}>
-          {messages.map((m, idx) => (
-            <div
-              key={idx}
-              style={{
-                marginBottom: '14px',
-                textAlign: m.sender === 'user' ? 'right' : 'left',
-              }}
-            >
-              <div
-                style={{
-                  display: 'inline-block',
-                  padding: '10px 14px',
-                  borderRadius: '12px',
-                  background: m.sender === 'user' ? '#1976d2' : '#f0f0f0',
-                  color: m.sender === 'user' ? '#fff' : '#222',
-                  maxWidth: '75%',
-                  textAlign: 'left',
-                }}
-              >
-                {m.text}
-
-                {/* Render Proposed Action Cards if attached */}
-                {m.actions && m.actions.length > 0 && (
-                  <div style={{ marginTop: '10px' }}>
-                    {m.actions.map((act, aIdx) => (
-                      <div
-                        key={aIdx}
-                        style={{
-                          background: '#fff',
-                          border: `2px solid ${act.arguments.tier === 'RED' ? '#d32f2f' : '#fbc02d'}`,
-                          borderRadius: '6px',
-                          padding: '10px',
-                          color: '#333',
-                          marginTop: '8px',
-                          fontSize: '13px',
-                        }}
-                      >
-                        <div>
-                          <strong>📋 Action:</strong> <code>{act.tool}</code>
-                          <span
-                            style={{
-                              marginLeft: '8px',
-                              padding: '2px 6px',
-                              borderRadius: '4px',
-                              background: act.arguments.tier === 'RED' ? '#ffebee' : '#fffde7',
-                              color: act.arguments.tier === 'RED' ? '#d32f2f' : '#f57f17',
-                              fontWeight: 'bold',
-                            }}
-                          >
-                            Tier: {act.arguments.tier || 'YELLOW'}
-                          </span>
-                        </div>
-
-                        {act.arguments.amount && (
-                          <div style={{ marginTop: '4px' }}>
-                            <strong>Amount:</strong> {act.arguments.amount} {act.arguments.currency}
-                          </div>
-                        )}
-                        {act.arguments.recipient_id && (
-                          <div>
-                            <strong>Recipient:</strong> <code>{act.arguments.recipient_id}</code>
-                          </div>
-                        )}
-                        {act.arguments.subscription_id && (
-                          <div>
-                            <strong>Subscription ID:</strong> <code>{act.arguments.subscription_id}</code>
-                          </div>
-                        )}
-                        {act.arguments.action_id && (
-                          <div style={{ color: '#777', fontSize: '11px', marginTop: '4px' }}>
-                            Ticket ID: <code>{act.arguments.action_id}</code>
-                            {act.arguments.action_id && act.arguments.action_digest && (
-                              <div style={{ marginTop: '8px', paddingTop: '6px', borderTop: '1px dashed #ccc' }}>
-                                {/* 1. Confirm Button (Shown if not confirmed yet) */}
-                                {(!actionStates[act.arguments.action_id] || actionStates[act.arguments.action_id].status === 'PENDING_CONFIRMATION') && (
-                              <button
-                                onClick={() => handleConfirm(act.arguments.action_id!, act.arguments.action_digest!)}
-                                style={{ padding: '4px 10px', background: '#2e7d32', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
-                              >
-                                ✅ Confirm & Execute
-                              </button>
-                            )}
-
-                            {/* 2. MFA Input (Shown if Red tier) */}
-                            {actionStates[act.arguments.action_id]?.status === 'PENDING_MFA' && (
-                              <div style={{ background: '#fff3e0', padding: '6px', borderRadius: '4px' }}>
-                                <div style={{ background: '#fff', border: '1px dashed #e65100', padding: '6px', borderRadius: '4px', marginBottom: '6px' }}>
-                                  <small style={{ fontWeight: 'bold' }}>📨 Demo inbox (simulated, no SMS/email sent)</small>
-                                  <div><small>{actionStates[act.arguments.action_id]?.inboxMessage || 'No code yet. Check the backend console.'}</small></div>
-                                </div>
-                                <small style={{ color: '#e65100', fontWeight: 'bold' }}>🔒 Enter the OTP code from your demo inbox:</small>
-                                <div style={{ display: 'flex', gap: '4px', marginTop: '4px' }}>
-                                  <input
-                                    type="text"
-                                    placeholder="6-digit code"
-                                    value={actionStates[act.arguments.action_id]?.mfaCode || ''}
-                                    onChange={(e) => {
-                                      const val = e.target.value;
-                                      setActionStates((prev) => ({
-                                        ...prev,
-                                        [act.arguments.action_id!]: { ...prev[act.arguments.action_id!], mfaCode: val, error: undefined },
-                                      }));
-                                    }}
-                                    style={{ padding: '4px', width: '100px' }}
-                                  />
-                                  <button
-                                    onClick={() => handleVerify(act.arguments.action_id!, actionStates[act.arguments.action_id!]?.mfaCode || '')}
-                                    style={{ padding: '4px 8px', background: '#d32f2f', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
-                                  >
-                                    Verify
-                                  </button>
-                                </div>
-                                {actionStates[act.arguments.action_id]?.error && (
-                                  <small style={{ color: '#c62828' }}>⚠️ {actionStates[act.arguments.action_id]?.error}</small>
-                                )}
-                              </div>
-                            )}
-
-                            {/* 3. Completed Badge */}
-                            {actionStates[act.arguments.action_id]?.status === 'COMPLETED' && (
-                              <div style={{ color: '#2e7d32', fontWeight: 'bold' }}>
-                                🎉 {actionStates[act.arguments.action_id]?.message || 'Executed successfully!'}
-                              </div>
-                            )}
-
-                            {/* 4. Failed Badge */}
-                            {actionStates[act.arguments.action_id]?.status === 'FAILED' && (
-                              <div style={{ color: '#c62828', fontWeight: 'bold' }}>
-                                ❌ {actionStates[act.arguments.action_id]?.error || 'Failed.'}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          ))}
-          {sending && <p style={{ color: '#888', fontStyle: 'italic' }}>🤖 Agent is typing...</p>}
-        </div>
-
-        {/* Input Bar */}
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <input
-            type="text"
-            value={inputMessage}
-            placeholder="Type 'Transfer 500 CNY to Bob' or 'Cancel my subscription'..."
-            onChange={(e) => setInputMessage(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-            style={{ flex: 1, padding: '10px', borderRadius: '4px', border: '1px solid #ccc' }}
-          />
-          <button
-            onClick={handleSend}
-            disabled={sending || !inputMessage.trim()}
-            style={{ padding: '10px 20px', cursor: 'pointer', background: '#1976d2', color: '#fff', border: 'none', borderRadius: '4px' }}
-          >
-            Send
-          </button>
-        </div>
-      </section>
-
-      {/* Transactions Section */}
-      <section>
-        <h3>📜 Recent Transactions</h3>
-        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
-          <thead>
-            <tr style={{ borderBottom: '2px solid #ccc' }}>
-              <th style={{ padding: '8px' }}>Date</th>
-              <th style={{ padding: '8px' }}>Merchant</th>
-              <th style={{ padding: '8px' }}>Category</th>
-              <th style={{ padding: '8px', textAlign: 'right' }}>Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            {transactions.map((tx) => (
-              <tr key={tx.transaction_id} style={{ borderBottom: '1px solid #eee' }}>
-                <td style={{ padding: '8px' }}>{new Date(tx.timestamp).toLocaleDateString()}</td>
-                <td style={{ padding: '8px' }}>{tx.merchant}</td>
-                <td style={{ padding: '8px' }}>{tx.category}</td>
-                <td
-                  style={{
-                    padding: '8px',
-                    textAlign: 'right',
-                    fontWeight: 'bold',
-                    color: tx.direction === 'credit' ? '#2e7d32' : '#c62828',
-                  }}
-                >
-                  {tx.direction === 'credit' ? '+' : '-'}
-                  {tx.amount} CNY
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
-
-      <SubscriptionsPanel
-        candidates={subscriptions}
-        records={storedSubscriptions}
-        accountId={accounts.map((account) => account.account_id).sort()[0]}
-        onRequestCancellation={setInputMessage}
-      />
-
-      {/* --- 2. AUDIT TRAIL LOG VIEWER --- */}
-      <section style={{ borderTop: '2px solid #ccc', paddingTop: '16px' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h3>🛡️ Bank Immutable Audit Trail ({auditLogs.length} events)</h3>
-          <button
-            onClick={() => setShowAudit(!showAudit)}
-            style={{ padding: '4px 10px', cursor: 'pointer' }}
-          >
-            {showAudit ? '🔼 Hide Audit Log' : '🔽 Show Audit Log'}
-          </button>
-        </div>
-
-        {showAudit && (
-          <div style={{ maxHeight: '220px', overflowY: 'auto', background: '#263238', color: '#eceff1', padding: '10px', borderRadius: '4px', fontSize: '12px', fontFamily: 'monospace' }}>
-            {auditLogs.length === 0 && <p>No audit events recorded yet.</p>}
-            {auditLogs.map((log) => (
-              <div key={log.audit_id} style={{ borderBottom: '1px solid #37474f', paddingBottom: '6px', marginBottom: '6px' }}>
-                <span style={{ color: '#80cbc4' }}>[{new Date(log.timestamp).toLocaleTimeString()}]</span>{' '}
-                <strong style={{ color: '#ffb74d' }}>{log.event_type}</strong> |{' '}
-                <span>Action: <code>{log.action_id}</code></span> |{' '}
-                <span style={{ color: '#a5d6a7' }}>Reason: {log.reason_code}</span>
-              </div>
-            ))}
+          <div className="composer-area">
+            <form className="composer" onSubmit={event => { event.preventDefault(); void handleSend(); }}>
+              <label className="sr-only" htmlFor="bankly-message">Message bank.ly</label>
+              <textarea ref={composer} id="bankly-message" rows={2} value={inputMessage} placeholder="Ask bank.ly anything about your money…"
+                onChange={event => setInputMessage(event.target.value)}
+                onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void handleSend(); } }} />
+              <div className="composer-toolbar"><span><Icon name="shield" width="14" height="14" />Financial actions need your approval</span><button className="send-button" type="submit" disabled={sending || !inputMessage.trim()} aria-label="Send message"><Icon name="send" /></button></div>
+            </form>
+            <p className="composer-note">bank.ly can make mistakes. Review details before approving. <span>Synthetic banking demo.</span></p>
           </div>
-        )}
-      </section>
+        </section>
 
+        <section className="data-view" hidden={view !== 'transactions'} aria-label="Recent transactions">
+          <div className="page-heading"><div><span className="eyebrow">YOUR MONEY IN MOTION</span><h1>Transactions</h1><p>Your recent account activity, all in one place.</p></div><button className="secondary-button" onClick={loadData} disabled={loading}><Icon name="refresh" />Refresh</button></div>
+          <div className="table-panel"><div className="panel-heading"><h2>Recent activity</h2><span className="count-badge">{transactions.length} transactions</span></div><div className="table-scroll"><table><thead><tr><th>Date</th><th>Merchant</th><th>Category</th><th className="text-right">Amount</th></tr></thead><tbody>
+            {transactions.map(transaction => <tr key={transaction.transaction_id}><td className="date-cell">{new Date(transaction.timestamp).toLocaleDateString()}</td><td className="merchant-cell">{transaction.merchant}</td><td><span className="category-pill">{transaction.category}</span></td><td className={`amount-cell ${transaction.direction === 'credit' ? 'amount-credit' : ''}`}>{transaction.direction === 'credit' ? '+' : '−'}{money(transaction.amount)}</td></tr>)}
+          </tbody></table></div>{!transactions.length && <div className="empty-state">{loading ? 'Loading activity…' : 'No transactions to show yet.'}</div>}</div>
+        </section>
+
+        <section className="data-view" hidden={view !== 'subscriptions'} aria-label="Subscriptions">
+          <div className="page-heading"><div><span className="eyebrow">MAKE ROOM FOR WHAT MATTERS</span><h1>Subscriptions</h1><p>Understand recurring charges. Stay in control of your subscriptions.</p></div><button className="secondary-button" onClick={loadData} disabled={loading}><Icon name="refresh" />Refresh</button></div>
+          <SubscriptionsPanel candidates={subscriptions} records={storedSubscriptions} accountId={accounts.map(account => account.account_id).sort()[0]} onRequestCancellation={draftMessage} />
+        </section>
+
+        <section className="data-view" hidden={view !== 'audit'} aria-label="Bank audit trail">
+          <div className="page-heading"><div><span className="eyebrow">TRANSPARENCY AT EVERY STEP</span><h1>Activity &amp; audit</h1><p>A record of your banking actions and the checks behind them.</p></div><button className="secondary-button" onClick={loadData} disabled={loading}><Icon name="refresh" />Refresh</button></div>
+          <div className="table-panel"><div className="panel-heading"><h2><Icon name="shield" />Bank audit trail</h2><button className="secondary-button" onClick={() => setShowAudit(!showAudit)} aria-expanded={showAudit}>{showAudit ? 'Hide Audit Log' : 'Show Audit Log'}<span className="count-badge">{auditLogs.length}</span></button></div>
+            {showAudit ? <div className="audit-list">{auditLogs.length === 0 && <div className="empty-state">No audit events recorded yet.</div>}{auditLogs.map(log => <article key={log.audit_id} className="audit-event"><span className="audit-mark"><Icon name="shield" width="17" height="17" /></span><div><strong>{log.event_type}</strong><p>Reason: {log.reason_code}</p><details><summary>Action details</summary><code>{log.action_id}</code></details></div><time dateTime={log.timestamp}>{new Date(log.timestamp).toLocaleString()}</time></article>)}</div> : <div className="empty-state"><Icon name="shield" width="30" height="30" /><p>Your audit trail is ready to review.</p><span>Expand the log to see recorded decisions and actions.</span></div>}
+          </div>
+        </section>
+      </main>
     </div>
   );
 }

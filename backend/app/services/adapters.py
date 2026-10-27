@@ -142,7 +142,7 @@ class AgentAdapterService:
 
 class SecurityAdapterService:
     def __init__(self, use_mock: bool | None = None):
-        # Reads USE_MOCK_SECURITY env var (default: False)
+        # Real P4 is the default; mock policy must be selected explicitly.
         if use_mock is not None:
             if not isinstance(use_mock, bool):
                 raise ValueError(f"Invalid use_mock={use_mock!r}; expected a boolean or None")

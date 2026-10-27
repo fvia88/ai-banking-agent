@@ -1,9 +1,11 @@
 # P4 policy integration
 
-The backend now calls `security.policy.evaluate_action(proposal, context)` by
-default. No changes to P4's module or frozen contracts are required.
+The backend can call `security.policy.evaluate_action(proposal, context)` through
+the real adapter. No changes to P4's module or frozen contracts are required.
 
-`USE_MOCK_SECURITY=false` selects real P4 (the default in local code and Compose).
+`USE_MOCK_SECURITY=false` selects real P4 and is the default in both local code
+and Compose. The default expectations in the bridge and integration tests now
+agree. See `security_defaults_and_audit.md` for the final behavior and evidence.
 `USE_MOCK_SECURITY=true` explicitly selects the P2 mock for isolated demos. A
 failed real evaluator import is not silently replaced with a mock. P1 provider
 selection is independent: real P1 with `AGENT_PROVIDER=mock` can exercise real P4
@@ -30,10 +32,9 @@ policy decision even with a correct OTP. Insufficient funds remain enforced by
 the transfer executor, since P4 currently classifies risk rather than checking
 sufficient funds.
 
-The current UI still receives action_id/action_digest/tier inside the response
-proposal's arguments for compatibility. These tracking fields are added only
-after policy evaluation; execution-time checks use the clean stored payload.
-Separating UI metadata into a coordinated contract remains future work.
+The UI now receives action_id/action_digest/tier/status in a separate `approval`
+object. Both response arguments and stored payloads stay canonical; see
+`frontend_metadata_transport.md` for the P2 HTTP schema and rollout instructions.
 
 ## Verification and remaining work
 
@@ -43,16 +44,18 @@ stored payload tampering, sequential cumulative escalation, changed policy durin
 MFA, replay, and real P1 + real P4 operation with a deterministic LLM provider.
 Existing OTP lifecycle and race tests continue to run with real P4 enabled.
 
-This integration does not establish full concurrency safety: simultaneous Yellow
-confirmations or competing account transfers still need database serialization.
-The existing consumed-MFA-marker/execution transaction split also remains.
-Daily totals still lack a calendar reset. Recipient ownership needs verified
+The subsequent execution guard now protects concurrent confirmations and competing
+account transfers; see `execution_safety.md` for transaction boundaries, verified
+SQLite/PostgreSQL scenarios and remaining scope. MFA consumption and successful
+execution now commit together.
+Daily totals now use the lifecycle in `daily_transfer_lifecycle.md`. Recipient ownership needs verified
 backend records; P4's account matching does not validate recipient ownership.
 Subscription eligibility/persistence now uses the P5 integration described in
 `p5_integration.md`. Repeated
-OTP failure marks an action failed; it does not yet implement the challenge's
-broader user/account safety-lock policy. These require follow-up work with the
-relevant owners and are not guarantees of this bridge.
+OTP failure still retires its action. Owner-wide repeated verification failures
+now also trigger a persistent safety lock; see `safety_lock.md` for thresholds,
+audit, pending-ticket retirement, and manual demo reset. Remaining broader
+requirements are tracked in `broader_requirements_review.md`.
 
 ## Run
 
@@ -63,5 +66,5 @@ docker compose up -d --build
 ```
 
 Local users restart `python backend/start.py --reload` with
-`USE_MOCK_SECURITY=false` (or leave it unset). No database migration is introduced
+`USE_MOCK_SECURITY=false` or leave it unset to use real P4. No database migration is introduced
 by this policy integration.
