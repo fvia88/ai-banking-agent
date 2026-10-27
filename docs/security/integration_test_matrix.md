@@ -18,13 +18,14 @@ This matrix tracks security enforcement across both the **pure policy evaluation
 
 Per strict security verification rules:
 1. **A runtime scenario is never marked `PASS` merely because a unit test in `security/tests/test_policy.py` passes.**
-2. **Opt-in real-policy tests (`USE_MOCK_SECURITY=false` / `use_mock=False`) are explicitly distinguished from the default runtime configuration**, where `USE_MOCK_SECURITY` defaults to `"true"` in [backend/app/services/adapters.py:151](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/services/adapters.py#L151) and activates `MockSecurityAdapter` unless overridden.
+2. **Default real-policy runtime vs. explicit mock mode**: In [backend/app/services/adapters.py:151](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/services/adapters.py#L151), `USE_MOCK_SECURITY` defaults to `"false"` when unset, selecting the real P4 security policy engine (`security.policy.evaluate_action`) by default. `MockSecurityAdapter` is used only when `USE_MOCK_SECURITY=true` or `use_mock=True` is explicitly configured.
+3. **Sequential integration coverage vs. concurrent execution guarantees**: Passing sequential HTTP integration tests ([backend/tests/test_security_integration.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_integration.py)) and MFA lifecycle tests ([backend/tests/test_mfa.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_mfa.py)) do **not** establish complete production security or prove concurrent correctness. Multi-threaded concurrency regression tests in [backend/tests/test_security_concurrency.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_concurrency.py) were run against file-backed SQLite and currently fail (`3 failed`), reproducing three unresolved concurrency vulnerabilities in P2-owned runtime code. **PostgreSQL concurrency behavior has not been verified.**
 
 ### Status Legend
-- **`PASS`**: Property is implemented and verified by automated tests at the specified layer and mode.
-- **`FAIL / UNFIXED`**: Inspected runtime code violates the expected security property (vulnerability or defect confirmed unfixed).
-- **`NOT TESTED`**: Runtime behavior (such as a multi-threaded concurrency race or specific real-mode HTTP path) is not covered by automated tests.
-- **`BLOCKED`**: Policy implementation and bridge tests exist, but end-to-end runtime activation depends on changes in shared files owned by Person 2 (Backend) or Person 3 (MFA).
+- **`PASS`**: Property is implemented and verified by reported passing automated tests at the specified layer and mode (sequential or single-action SQLite scope as noted).
+- **`FAIL / UNFIXED`**: Inspected runtime code and automated concurrency tests confirm an unresolved vulnerability or defect.
+- **`PARTIAL`**: Core path is verified by passing tests, while a sub-case or multi-action/cross-environment aspect remains unverified.
+- **`NOT VERIFIED`**: Behavior (such as PostgreSQL concurrency and row locking) has not been executed or verified in this environment.
 
 ---
 
@@ -32,31 +33,96 @@ Per strict security verification rules:
 
 | ID | Scenario | Layer | Current Status | Owner |
 | :--- | :--- | :--- | :---: | :---: |
-| **M-01A** | Policy decisions: Tier GREEN (`get_balance`, `analyze_spending`, `list_subscriptions`) | Pure Policy & Opt-in Real Adapter (`use_mock=False`) | **PASS** | P4 |
-| **M-01B** | Tier GREEN routing through `POST /api/v1/chat` | Runtime HTTP (`chat.py`) | **BLOCKED** (Bypasses `policy_service`) | P2 / P4 |
-| **M-01C** | Policy decisions: Tier YELLOW (`request_transfer` cumulative $\le 1,000.00\text{ CNY}$, `request_subscription_cancel`) | Pure Policy (**PASS**); E2E HTTP Real P1 + Real P4 for transfer (**PASS**); HTTP subscription cancel (**PASS** in Mock Policy / **NOT TESTED** in Real Policy HTTP) | **PASS** (Transfer Real E2E) / **PARTIAL** (Sub Cancel HTTP Mock-Only) | P4 / P2 |
-| **M-01D** | Policy decisions: Tier RED (`request_transfer` cumulative $> 1,000.00\text{ CNY}$, requires confirmation + MFA) | Pure Policy & Service `create_action_record` (`use_mock=False`: **PASS**); Full HTTP `/chat` $\rightarrow$ `/confirm` $\rightarrow$ `/verify` (**PASS** in Mock Policy / **NOT TESTED** in Real Policy HTTP) | **PASS** (Policy & Service Real Mode; HTTP Mock Mode) | P4 / P2 / P3 |
-| **M-02A** | Unknown / unwhitelisted tools rejected fail-closed (`UNKNOWN_TOOL`) | Pure Policy, Opt-in Real Adapter, `create_action_record`, & `/verify` dispatch (**PASS**) vs. Default Mock Policy Runtime (**FAIL**) | **PASS** (Opt-in Real Mode & `/verify`) / **FAIL** (Default Mock Runtime) | P4 / P2 / P3 |
-| **M-02B** | Malformed, negative, non-finite, over-precision, or extra injected arguments (`INVALID_TOOL_ARGUMENTS`) | Pure Policy & Opt-in Real Adapter (`use_mock=False`: **PASS**) vs. Default Mock Policy Runtime (**FAIL**) | **PASS** (Opt-in Real Mode) / **FAIL** (Default Mock Runtime) | P4 / P2 |
-| **M-02C** | Server metadata (`action_id`, `action_digest`, `tier`) mutated in-place on `proposal.arguments` | Runtime HTTP (`chat.py:227-232`) | **BLOCKED** | P2 / P4 |
-| **M-03A** | Cross-account transfer spoofing (`source_account_id != context.account_id` $\rightarrow$ `SOURCE_ACCOUNT_MISMATCH`) | Pure Policy & Opt-in Real HTTP `/api/v1/chat` (`use_mock=False`) vs. Default Mock Policy Runtime (`use_mock=True`) | **PASS** (Opt-in Real Mode) / **FAIL** (Default Mock Runtime) | P4 / P2 |
-| **M-03B** | Cross-account read-only query (`account_id != context.account_id` $\rightarrow$ `ACCOUNT_MISMATCH`) | Pure Policy (**PASS**) vs. Runtime HTTP `chat.py` (**BLOCKED**) | **PASS** (Policy) / **BLOCKED** (Runtime HTTP) | P2 / P4 |
-| **M-03C** | Locked-account mutation rejection at proposal time (`ACCOUNT_LOCKED`) | Pure Policy (`use_mock=False`: **PASS**); Runtime HTTP `POST /api/v1/chat` (**PASS** in Mock Policy / **BLOCKED** in Real Policy + Mock Agent) | **PASS** (Policy & Mock HTTP) / **BLOCKED** (Real Policy + Mock Agent) | P4 / P2 |
-| **M-04A** | Real policy evaluation through `SecurityAdapterService` (`USE_MOCK_SECURITY=false` / `use_mock=False`) | Adapter & HTTP Bridge (`adapters.py`) | **PASS** (Opt-in Real Mode; Disabled by Default `USE_MOCK_SECURITY="true"`) | P4 |
-| **M-04B** | Enabling `USE_MOCK_SECURITY=false` by default while `USE_MOCK_AGENT=true` (`MockAgentAdapter` omits `source_account_id`) | Runtime Default Config (`adapters.py`, `app/mocks/agent.py`, `actions.py`) | **BLOCKED** | P2 |
-| **M-05** | Yellow confirmation after account lock (TOCTOU between `/chat` and `/confirm`) | Runtime HTTP (`approvals.py:35-128`) | **FAIL / UNFIXED** | P2 / P4 |
-| **M-06** | Yellow-to-Red escalation when cumulative daily transfers change before `/confirm` | Runtime HTTP (`approvals.py:90-128`) | **FAIL / UNFIXED** | P2 / P3 / P4 |
-| **M-07A** | Red MFA verification after account lock (`UserModel.is_locked` check at `/verify`) | Runtime HTTP (`approvals.py:216-222`) | **PASS** | P3 |
-| **M-07B** | Execution-time policy re-evaluation (`policy_service.evaluate`) in `/confirm` and `/verify` | Runtime HTTP (`approvals.py:89, 223-224`) | **FAIL / UNFIXED** (Not Implemented; `TODO(P4)` in `/verify`) | P2 / P3 / P4 |
-| **M-08A** | Concurrent Red MFA verification of the same `action_id` (`POST /api/v1/actions/{id}/verify`) | Runtime HTTP & DB (`mfa.py:110-127`, `approvals.py:227`) | **PASS** | P3 |
-| **M-08B** | Concurrent Yellow confirmation of the same `action_id` (`POST /api/v1/actions/{id}/confirm`) | Runtime HTTP & DB (`approvals.py:42-121`) | **FAIL / UNFIXED** (By Code Inspection; Concurrency Race **NOT TESTED**) | P2 |
-| **M-09** | Competing transfers against the same account across distinct `action_id`s (balance & daily limit race) | Runtime Executor & DB (`executor.py:28-50`) | **FAIL / UNFIXED** (By Code Inspection; Concurrency Race **NOT TESTED**) | P2 |
-| **M-10A** | Canonical rejection reason codes returned by policy and `create_action_record` | Pure Policy & Service (`security/rules.py`, `actions.py:108-109`) | **PASS** | P4 / P2 |
-| **M-10B** | Rejection reason code propagation and audit logging in `POST /api/v1/chat` and `/confirm` rejections | Runtime HTTP (`chat.py:234-240`, `approvals.py`) | **FAIL / UNFIXED** | P2 / P3 |
+| **M-01A** | Policy decisions: Tier GREEN (`get_balance`, `analyze_spending`, `list_subscriptions`) | Pure Policy & Default Real Adapter (`use_mock=False`) | **PASS** | P4 |
+| **M-01B** | Tier GREEN routing & policy evaluation through `POST /api/v1/chat` | Runtime HTTP (`chat.py:109-129`) | **PASS** (`GET_BALANCE` verified over HTTP in `test_security_integration.py`) | P2 / P4 |
+| **M-01C** | Policy decisions: Tier YELLOW (`request_transfer` cumulative $\le 1,000.00\text{ CNY}$, `request_subscription_cancel`) | Pure Policy & Sequential Runtime HTTP (`USE_MOCK_SECURITY=false` default) | **PASS** (Sequential; see **M-08B / M-09** for concurrency failures) | P4 / P2 |
+| **M-01D** | Policy decisions: Tier RED (`request_transfer` cumulative $> 1,000.00\text{ CNY}$, requires confirmation + MFA) | Pure Policy, Service `create_action_record`, & Sequential HTTP `/chat` $\rightarrow$ `/confirm` $\rightarrow$ `/verify` | **PASS** (Sequential; see **M-09** for cross-action concurrency) | P4 / P2 / P3 |
+| **M-02A** | Unknown / unwhitelisted tools rejected fail-closed (`UNKNOWN_TOOL`) | Pure Policy, Default Real Adapter, `create_action_record`, & `/verify` dispatch | **PASS** (Default Real Runtime `USE_MOCK_SECURITY=false`) | P4 / P2 / P3 |
+| **M-02B** | Malformed, negative, non-finite, over-precision, or extra injected arguments (`INVALID_TOOL_ARGUMENTS`) | Pure Policy, Default Real Adapter, & Runtime HTTP `POST /api/v1/chat` | **PASS** | P4 / P2 |
+| **M-02C** | Clean `payload_json` persistence & stored-payload tampering rejection (`INVALID_STORED_ACTION`) | Runtime HTTP (`chat.py:226-238`, `approvals.py:29-38`) | **PASS** (Stored payload tampering blocked; UI tracking fields remain response-only) | P2 / P4 |
+| **M-03A** | Cross-account transfer spoofing (`source_account_id != context.account_id` $\rightarrow$ `SOURCE_ACCOUNT_MISMATCH`) | Pure Policy & Default Real Runtime HTTP `POST /api/v1/chat` | **PASS** | P4 / P2 |
+| **M-03B** | Cross-account read-only query (`account_id != context.account_id` $\rightarrow$ `ACCOUNT_MISMATCH`) | Pure Policy (**PASS**) & Runtime HTTP `chat.py:114-129` | **PASS** (Policy) / **PARTIAL** (Wired in `chat.py`; HTTP test covers `GET_BALANCE` locked read) | P2 / P4 |
+| **M-03C** | Locked-account mutation rejection (`ACCOUNT_LOCKED`) & read-only balance access at proposal time | Pure Policy & Default Real Runtime HTTP `POST /api/v1/chat` | **PASS** | P4 / P2 |
+| **M-04A** | Real policy evaluation through `SecurityAdapterService` (`USE_MOCK_SECURITY=false` default) | Adapter & HTTP Bridge (`adapters.py:143-166`) | **PASS** | P4 |
+| **M-04B** | `USE_MOCK_SECURITY=false` enabled by default with `MockAgentAdapter` supplying `source_account_id` | Runtime Default Config (`adapters.py`, `app/mocks/agent.py`, `actions.py`) | **PASS** | P2 / P4 |
+| **M-05** | Yellow confirmation after account lock (sequential TOCTOU between `/chat` and `/confirm`) | Runtime HTTP (`approvals.py:22-89, 164`) | **PASS** (Sequential) | P2 / P4 |
+| **M-06** | Yellow-to-Red escalation when cumulative daily transfers change before `/confirm` | Runtime HTTP (`approvals.py:22-89, 164-192`) | **PASS** (Sequential) / **FAIL / UNFIXED** (Concurrent — see Section 3, **Defect 2**) | P2 / P3 / P4 |
+| **M-07A** | Red MFA verification after account lock (`UserModel.is_locked` check at `/verify`) | Runtime HTTP (`approvals.py:302`) | **PASS** | P3 / P2 |
+| **M-07B** | Execution-time policy re-evaluation (`_current_policy`) in `/confirm` and `/verify` | Runtime HTTP (`approvals.py:22-89, 164, 302`) | **PASS** (Sequential; does not serialize concurrent requests) | P2 / P3 / P4 |
+| **M-08A** | Concurrent Red MFA verification of the **same** `action_id` (`POST /api/v1/actions/{id}/verify`) | Runtime HTTP & DB (`mfa.py:110-132`, `approvals.py:310`) | **PASS** (Same-Action SQLite) / **NOT VERIFIED** (PostgreSQL; Cross-Action Red Verify) | P3 / P2 |
+| **M-08B** | Concurrent Yellow confirmation of the **same** `action_id` (`POST /api/v1/actions/{id}/confirm`) | Runtime HTTP & DB (`approvals.py:117-200`) | **FAIL / UNFIXED** (Reproduced on SQLite — see Section 3, **Defect 1**) | P2 (Runtime) / P4 (Test) |
+| **M-09** | Concurrent transfers against the same account across **distinct** `action_id`s (daily limit & balance races) | Runtime HTTP & Executor (`approvals.py`, `executor.py:29-50`) | **FAIL / UNFIXED** (Reproduced on SQLite — see Section 3, **Defects 2 & 3**; PostgreSQL **NOT VERIFIED**) | P2 (Runtime) / P4 (Test) |
+| **M-10A** | Canonical rejection reason codes returned by policy and `create_action_record` | Pure Policy & Service (`security/rules.py`, `actions.py:14-50`) | **PASS** | P4 / P2 |
+| **M-10B** | Rejection reason code surfacing in `POST /api/v1/chat` and `ACTION_POLICY_REJECTED` audit logging in `/confirm` & `/verify` | Runtime HTTP (`chat.py:242-259`, `approvals.py:81-88`) | **PASS** (Execution-time rejections audited; `/chat` surfaces reason codes) | P2 / P3 |
 
 ---
 
-## 3. Detailed Scenario Analysis
+## 3. Unresolved Concurrency Vulnerabilities in P2-Owned Runtime Code
+
+> [!WARNING]
+> **Sequential Integration Passing $\neq$ Concurrent Execution Safety**  
+> Passing results in `backend/tests/test_security_integration.py` (16 passed), `backend/tests/test_mfa.py` (18 passed), and the broader backend suite (`backend/tests` excluding `test_security_concurrency.py`: 133 passed, 7 skipped) verify **sequential** execution-time policy re-evaluation (`_current_policy`) and **single-action** Red MFA challenge claims (`mfa.claim_challenge`). They do **not** establish complete production security or prove concurrent correctness.
+>
+> As documented in [`backend/app/api/approvals.py:25-26`](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/api/approvals.py#L25-L26) and [`docs/app/p4_integration.md:46-48`](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/docs/app/p4_integration.md#L46-L48), `_current_policy` does not serialize concurrent action confirmations or competing account transfers. All 3 tests in [backend/tests/test_security_concurrency.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_concurrency.py) **currently fail (`3 failed`)**, each reproducing a concrete concurrency vulnerability.
+> - **Test Environment**: File-backed SQLite databases (`sqlite:///` under `pytest` `tmp_path`) with one independent SQLAlchemy `Session` per worker thread and `threading.Barrier` synchronization at `_current_policy`.
+> - **PostgreSQL Verification Status**: **PostgreSQL concurrency behavior has not been verified.**
+
+### Defect 1 — Duplicate Concurrent Yellow `/confirm` Requests Execute Twice (M-08B)
+- **Test Name**: `backend/tests/test_security_concurrency.py::test_concurrent_duplicate_yellow_confirm_executes_at_most_once`
+- **Observed Failure**:
+  ```text
+  AssertionError: Expected 1 transfer ledger entry:
+    outcomes=[('ok', <ActionStatus.COMPLETED: 'COMPLETED'>, 'aud_99b02aa85c'),
+              ('ok', <ActionStatus.COMPLETED: 'COMPLETED'>, 'aud_1d812c8424')],
+    tx_count=2, audit_count=2, audit_ids=['aud_99b02aa85c', 'aud_1d812c8424'],
+    balance=14750.00, daily_total=500.00, action_status=COMPLETED,
+    action_audit_id=aud_1d812c8424
+  assert 2 == 1
+  ```
+- **Security Impact**:
+  - In [`confirm_action`](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/api/approvals.py#L117-L200), `ActionApprovalModel` is loaded with a non-locking `SELECT` (`L117`), `record.status != ActionStatus.PENDING_CONFIRMATION.value` is checked in Python (`L148`), `_current_policy` runs (`L164`), and `_execute_action` executes (`L195`) before `record.status = ActionStatus.COMPLETED.value` is set (`L197`).
+  - Unlike Red `/verify` (`mfa.claim_challenge`), Yellow `/confirm` performs no atomic action-status claim prior to execution. Two concurrent `/confirm` requests for the same `action_id` (`act_dup_yellow`) both succeed (`COMPLETED`) with different `audit_id`s, creating **two ledger transactions (`tx_count=2`)** and **two execution audit entries (`audit_count=2`)** while overwriting `AccountModel` from stale ORM state.
+- **Ownership**: **P2 (Primary Runtime Owner)** for atomic action claiming and execution serialization in `backend/app/api/approvals.py` and `backend/app/services/executor.py`; **P4** for security requirements and concurrency regression evidence.
+- **Test Environment**: File-backed SQLite (`dup_yellow.db` under `pytest` `tmp_path`). **PostgreSQL concurrency has not been verified.**
+
+### Defect 2 — Concurrent Yellow Transfers Bypass Cumulative Daily Threshold Without MFA (M-06 / M-09)
+- **Test Name**: `backend/tests/test_security_concurrency.py::test_concurrent_yellow_transfers_cannot_bypass_cumulative_daily_threshold`
+- **Observed Failure**:
+  ```text
+  AssertionError: Both 600 CNY Yellow transfers must not complete without MFA:
+    outcomes=[('act_yellow_600_2', 'ok', <ActionStatus.COMPLETED: 'COMPLETED'>, 'aud_1458c4b581'),
+              ('act_yellow_600_1', 'ok', <ActionStatus.COMPLETED: 'COMPLETED'>, 'aud_fa3b31b41b')],
+    statuses=(COMPLETED, COMPLETED), tiers=(YELLOW, YELLOW),
+    tx_count=2, exec_audit_count=2, balance=14650.00, daily_total=600.00
+  assert 2 == 1
+  ```
+- **Security Impact**:
+  - When `daily_transfer_total` starts at `0.00 CNY` and two separate `600.00 CNY` Yellow transfers (`act_yellow_600_1` and `act_yellow_600_2`, combined `1,200.00 CNY > 1,000.00 CNY` threshold) are confirmed concurrently, both worker threads read the same stale `daily_transfer_total == 0.00 CNY` in [`_current_policy`](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/api/approvals.py#L50-L63).
+  - Both transfers pass the `1,000.00 CNY` cumulative daily threshold check as `Tier.YELLOW` (`0.00 + 600.00 <= 1000.00`) and **both execute to `COMPLETED` without MFA** (`tx_count=2`, `exec_audit_count=2`), completely bypassing Red-tier MFA escalation. In addition, unserialized ORM writes lose one update on `AccountModel.balance` (`14,650.00 CNY` instead of `14,050.00 CNY`) and `daily_transfer_total` (`600.00 CNY` instead of `1,200.00 CNY`).
+- **Ownership**: **P2 (Primary Runtime Owner)** for account-level serialization and atomic state updates in `backend/app/api/approvals.py` and `backend/app/services/executor.py` (with **P3** coordination if MFA challenge issuance is touched); **P4** for policy escalation semantics and concurrency regression evidence.
+- **Test Environment**: File-backed SQLite (`threshold_race.db` under `pytest` `tmp_path`). **PostgreSQL concurrency has not been verified.**
+
+### Defect 3 — Concurrent Transfers Exceeding Available Balance Both Succeed / Lost ORM Updates (M-09)
+- **Test Name**: `backend/tests/test_security_concurrency.py::test_concurrent_transfers_exceeding_balance_cannot_both_succeed`
+- **Observed Failure**:
+  ```text
+  AssertionError: Expected exactly 1 COMPLETED transfer:
+    outcomes=[('act_bal_400_2', 'ok', <ActionStatus.COMPLETED: 'COMPLETED'>, 'aud_a33c97512e'),
+              ('act_bal_400_1', 'ok', <ActionStatus.COMPLETED: 'COMPLETED'>, 'aud_fa0b03339a')],
+    statuses=(COMPLETED, COMPLETED), tx_count=2, exec_audit_count=2,
+    balance=100.00, daily_total=400.00
+  assert 2 == 1
+  ```
+- **Security Impact**:
+  - When `AccountModel.balance` starts at `500.00 CNY` and two `400.00 CNY` transfers (`act_bal_400_1` and `act_bal_400_2`, combined `800.00 CNY > 500.00 CNY` available balance) are confirmed concurrently, both requests read `account.balance == 500.00 >= 400.00` in [`execute_transfer`](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/services/executor.py#L29-L50).
+  - **Both transfers succeed (`statuses=(COMPLETED, COMPLETED)`, `tx_count=2`, `exec_audit_count=2`)**, recording `800.00 CNY` in executed transfer ledger entries against a `500.00 CNY` balance (overdrawn aggregate transfer amount), while lost ORM updates leave `AccountModel.balance` at `100.00 CNY` and `daily_transfer_total` at `400.00 CNY`.
+  - **Cross-Action Red `/verify` Impact**: Although P3's `mfa.claim_challenge` serializes duplicate `/verify` calls on a *single* `action_id`, two *different* Red `action_id`s verified concurrently for the same account also call `execute_transfer` and therefore depend on P2's account-level serialization to prevent the same balance overdraft and lost-update race.
+- **Ownership**: **P2 (Primary Runtime Owner)** for account-level locking and conditional balance/daily-total updates in `backend/app/services/executor.py` and `backend/app/api/approvals.py`; **P4** for security requirements and concurrency regression evidence.
+- **Test Environment**: File-backed SQLite (`insufficient_race.db` under `pytest` `tmp_path`). **PostgreSQL concurrency has not been verified.**
+
+---
+
+## 4. Detailed Scenario Analysis
 
 ### Scenario 1: Policy Decisions for Green, Yellow, and Red
 
@@ -66,40 +132,41 @@ Per strict security verification rules:
    - `request_subscription_cancel` and `request_transfer` with `context.daily_transfer_total + amount <= 1000.00` return `Tier.YELLOW`, `allowed_to_proceed=True`, `requires_confirmation=True`, `requires_mfa=False`.
    - `request_transfer` with `context.daily_transfer_total + amount > 1000.00` returns `Tier.RED`, `allowed_to_proceed=True`, `requires_confirmation=True`, `requires_mfa=True`, `reason_code="TRANSFER_EXCEEDS_DAILY_LIMIT"`.
 2. **Existing Test / Evidence**:
-   - [security/tests/test_policy.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/security/tests/test_policy.py): `test_t01_get_balance_green`, `test_analyze_spending_green`, `test_list_subscriptions_green`, `test_t02_transfer_within_daily_limit_yellow`, `test_transfer_with_existing_daily_total_within_limit`, `test_transfer_exact_boundary_1000_zero_prior`, `test_transfer_exact_boundary_1000_split`, `test_transfer_exact_boundary_plus_one_cent_zero_prior`, `test_transfer_exact_boundary_plus_one_cent_split`, `test_t03_transfer_exceeds_daily_limit_red`, `test_very_large_transfer_red`, `test_t07_cancel_subscription_yellow`, `test_fixture_driven_expected_cases_matrix`.
-   - [backend/tests/test_security_bridge.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_bridge.py): `test_explicit_use_mock_true_and_false_behavior`, `test_real_mode_invokes_security_policy_evaluate_action_spy`, `test_create_action_record_with_real_policy_preserves_reason_codes`.
+   - [security/tests/test_policy.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/security/tests/test_policy.py) (**84 passed**): `test_t01_get_balance_green`, `test_analyze_spending_green`, `test_list_subscriptions_green`, `test_t02_transfer_within_daily_limit_yellow`, `test_transfer_with_existing_daily_total_within_limit`, `test_transfer_exact_boundary_1000_zero_prior`, `test_transfer_exact_boundary_1000_split`, `test_transfer_exact_boundary_plus_one_cent_zero_prior`, `test_transfer_exact_boundary_plus_one_cent_split`, `test_t03_transfer_exceeds_daily_limit_red`, `test_very_large_transfer_red`, `test_t07_cancel_subscription_yellow`, `test_fixture_driven_expected_cases_matrix`.
+   - [backend/tests/test_security_bridge.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_bridge.py) (**27 passed**): `test_explicit_use_mock_true_and_false_behavior`, `test_real_mode_invokes_security_policy_evaluate_action_spy`, `test_create_action_record_with_real_policy_preserves_reason_codes`.
+   - [backend/tests/test_security_integration.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_integration.py) (**16 passed**): `test_http_proposals_call_actual_policy_at_threshold`.
 3. **Current Status**: **PASS**
 4. **Responsible Owner**: P4 (Security)
 5. **Required Follow-Up**: None in `security/`.
 
 #### M-01B — Runtime Green Tool Routing in `POST /api/v1/chat`
 1. **Expected Security Property**:
-   - Read-only proposals generated during `POST /api/v1/chat` should pass through `policy_service.evaluate(proposal, context)` before executing database queries so that `ACCOUNT_MISMATCH`, `INVALID_TOOL_ARGUMENTS` (e.g., malformed `period`), and `PolicyConfig(lock_denies_read_only=True)` are enforced uniformly.
+   - Read-only proposals generated during `POST /api/v1/chat` pass through `validate_tool_arguments` and `policy_service.evaluate(proposal, read_context)` before executing database queries.
 2. **Existing Test / Evidence**:
-   - Code inspection of [backend/app/api/chat.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/api/chat.py#L104-L200) confirms that when `result.proposals[0].tool.value in READ_TOOLS`, `chat.py` executes the read-only query directly without calling `policy_service.evaluate()`.
-3. **Current Status**: **BLOCKED** (Policy supports Green evaluation, but `chat.py` bypasses `policy_service` on the read-only double-hop path).
+   - Implemented in [backend/app/api/chat.py:109-129](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/api/chat.py#L109-L129).
+   - Verified over HTTP for `GET_BALANCE` by `test_locked_balance_read_still_calls_real_p4` in [backend/tests/test_security_integration.py:164-172](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_integration.py#L164-L172), confirming `POST /api/v1/chat` invokes `security.policy.evaluate_action` with `ToolName.GET_BALANCE` and `account_locked=True`.
+3. **Current Status**: **PASS**
 4. **Responsible Owner**: P2 (Backend) with P4 (Security)
-5. **Required Follow-Up**: P2 to invoke `policy_service.evaluate(proposal, context)` in `chat.py` before executing read-only tools.
+5. **Required Follow-Up**: None for `GET_BALANCE` routing; see M-03B for cross-account read-only HTTP test parameterization.
 
-#### M-01C — Runtime Yellow Action Creation & Execution (`request_transfer` and `request_subscription_cancel`)
+#### M-01C — Runtime Yellow Action Creation & Sequential Execution (`request_transfer` and `request_subscription_cancel`)
 1. **Expected Security Property**:
    - Yellow proposals persist an `ActionApprovalModel` in `PENDING_CONFIRMATION` and execute upon `POST /api/v1/actions/{action_id}/confirm` with matching `action_digest`.
 2. **Existing Test / Evidence**:
-   - **`request_transfer` (Opt-in Real P1 + Real P4 HTTP E2E)**: Verified by `test_http_chat_real_p1_agent_with_real_p4_policy_end_to_end` in [backend/tests/test_security_bridge.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_bridge.py#L410-L460) and service-level `test_create_action_record_with_real_policy_preserves_reason_codes` ([backend/tests/test_security_bridge.py:243-260](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_bridge.py#L243-L260)). Also verified in default mock mode by `test_confirm_yellow_action_completes_successfully` ([backend/tests/test_approvals.py:6-28](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_approvals.py#L6-L28)).
-   - **`request_subscription_cancel`**: Verified in pure policy by `test_t07_cancel_subscription_yellow` ([security/tests/test_policy.py:292-308](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/security/tests/test_policy.py#L292-L308)) and over HTTP in **default mock-policy mode (`policy_service.use_mock=True`)** by `test_t07_cancel_subscription_yellow_tier_and_execution` ([backend/tests/test_subscriptions.py:47-88](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_subscriptions.py#L47-L88)) and `test_real_cancellation_selection_uses_saved_draft` ([backend/tests/test_p1_integration.py:148-156](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_p1_integration.py#L148-L156)). Not yet tested over HTTP with `policy_service.use_mock=False`.
-3. **Current Status**: **PASS** (`request_transfer` in Opt-in Real P1 + Real P4 E2E HTTP) / **PARTIAL** (`request_subscription_cancel` verified in Pure Policy and Mock-Policy HTTP; **NOT TESTED** in Real-Policy HTTP).
+   - **`request_transfer` (Real P4 Policy by Default)**: Verified by `test_confirm_rechecks_real_policy_and_replays_without_new_debit` and `test_real_p1_and_real_p4_transfer_roundtrip` in [backend/tests/test_security_integration.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_integration.py#L77-L85), and `test_http_chat_real_p1_agent_with_real_p4_policy_end_to_end` in [backend/tests/test_security_bridge.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_bridge.py#L410-L460).
+   - **`request_subscription_cancel` (Real P4 Policy by Default)**: Verified in pure policy (`test_t07_cancel_subscription_yellow` in [security/tests/test_policy.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/security/tests/test_policy.py#L292-L308)) and in the broader backend test suite (`133 passed, 7 skipped` with `USE_MOCK_SECURITY=false` default).
+3. **Current Status**: **PASS** (Sequential execution; concurrent duplicate Yellow `/confirm` is **FAIL / UNFIXED** under **M-08B**).
 4. **Responsible Owner**: P4 / P2
-5. **Required Follow-Up**: Fix `MockAgentAdapter` in `backend/app/mocks/agent.py` to populate `source_account_id` so default runtime can switch to `USE_MOCK_SECURITY=false`.
+5. **Required Follow-Up**: P2 to implement atomic action claiming and account serialization for concurrent `/confirm` requests (see Section 3).
 
-#### M-01D — Runtime Red Action Creation, MFA Challenge, & Execution (`request_transfer` $> 1,000.00\text{ CNY}$)
+#### M-01D — Runtime Red Action Creation, MFA Challenge, & Sequential Execution (`request_transfer` $> 1,000.00\text{ CNY}$)
 1. **Expected Security Property**:
    - Red proposals persist an `ActionApprovalModel` in `PENDING_CONFIRMATION`, transition to `PENDING_MFA` upon `/confirm` (issuing a 6-digit OTP without debiting funds), and execute only upon `POST /api/v1/actions/{action_id}/verify` with a valid, unexpired OTP.
 2. **Existing Test / Evidence**:
-   - **Service Layer with Real Policy (`policy_service.use_mock=False`)**: Verified in `test_create_action_record_with_real_policy_preserves_reason_codes` ([backend/tests/test_security_bridge.py:261-275](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_bridge.py#L261-L275)).
-   - **Full HTTP Lifecycle (`/chat` $\rightarrow$ `/confirm` $\rightarrow$ `/verify`)**: Verified in **default mock-policy mode (`policy_service.use_mock=True`)** by `test_t03_red_tier_flow_requires_mfa_and_completes` ([backend/tests/test_approvals.py:48-85](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_approvals.py#L48-L85)) and `test_red_transfer_debits_once_only_after_valid_mfa` ([backend/tests/test_mfa.py:82-100](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_mfa.py#L82-L100)). Not yet tested end-to-end over HTTP with `policy_service.use_mock=False` because `_red_action_pending_mfa` uses `MockAgentAdapter` (`source_account_id=None`).
-3. **Current Status**: **PASS** (Pure Policy & Service-Layer Real Mode; Full HTTP in Default Mock Mode) / **BLOCKED** (Full HTTP with `USE_MOCK_AGENT=true` + `USE_MOCK_SECURITY=false` blocked on `MockAgentAdapter` omitting `source_account_id`).
+   - Verified with real P4 policy (`USE_MOCK_SECURITY=false` default) by `test_http_proposals_call_actual_policy_at_threshold`, `test_two_pending_yellow_actions_escalate_after_first_executes`, and `test_policy_rejection_at_verify_cannot_be_overridden_by_correct_otp` in [backend/tests/test_security_integration.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_integration.py) (**16 passed**), and all **18 passed** tests in [backend/tests/test_mfa.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_mfa.py).
+3. **Current Status**: **PASS** (Sequential & single-action Red `/verify`; cross-action concurrent transfers remain subject to **M-09**).
 4. **Responsible Owner**: P4 / P2 / P3
-5. **Required Follow-Up**: Populate `source_account_id` in `MockAgentAdapter` so `test_mfa.py` and `test_approvals.py` can run under `USE_MOCK_SECURITY=false`.
+5. **Required Follow-Up**: P2 to add account-level serialization in `executor.py` (see Section 3, Defect 3).
 
 ---
 
@@ -108,36 +175,37 @@ Per strict security verification rules:
 #### M-02A — Unknown / Unwhitelisted Tools (`UNKNOWN_TOOL`)
 1. **Expected Security Property**:
    - Any tool name outside `ToolName` (`get_balance`, `analyze_spending`, `list_subscriptions`, `request_transfer`, `request_subscription_cancel`) must be rejected fail-closed (`allowed_to_proceed=False`, `tier=Tier.RED`, `reason_code="UNKNOWN_TOOL"`).
-   - At execution time (`/confirm` and `/verify`), `_execute_action` must refuse any tool other than `request_transfer` and `request_subscription_cancel`.
+   - At execution time (`/confirm` and `/verify`), `_current_policy` and `_execute_action` must refuse any tool other than `request_transfer` and `request_subscription_cancel`.
 2. **Existing Test / Evidence**:
    - [security/tests/test_policy.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/security/tests/test_policy.py): `test_unknown_tool_object_rejected`, `test_action_proposal_with_unrecognized_tool_string_returns_unknown_tool`.
-   - [backend/tests/test_security_bridge.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_bridge.py): `test_unknown_tool_rejected_in_real_mode` (proving `MockSecurityAdapter` erroneously returns `Tier.GREEN` / `READ_ONLY_AUTOMATIC` while real policy returns `Tier.RED` / `UNKNOWN_TOOL`), `test_create_action_record_with_real_policy_preserves_reason_codes`.
+   - [backend/tests/test_security_bridge.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_bridge.py): `test_unknown_tool_rejected_in_real_mode`, `test_create_action_record_with_real_policy_preserves_reason_codes`.
    - [backend/tests/test_mfa.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_mfa.py): `test_unknown_tool_fails_closed_at_verify`.
-3. **Current Status**: **PASS** (in Opt-in Real Policy Mode `use_mock=False` and `/verify` executor dispatch) / **FAIL** (in Default Mock Policy Runtime `USE_MOCK_SECURITY="true"`, where `MockSecurityAdapter` allows unknown tools as `Tier.GREEN`).
+3. **Current Status**: **PASS** (Real P4 policy is active by default via `USE_MOCK_SECURITY=false`).
 4. **Responsible Owner**: P4 / P2 / P3
-5. **Required Follow-Up**: Switch default `USE_MOCK_SECURITY` to `"false"` once P2 updates `MockAgentAdapter`.
+5. **Required Follow-Up**: None.
 
 #### M-02B — Malformed, Negative, Non-Finite, Overlong, or Injected Arguments (`INVALID_TOOL_ARGUMENTS`)
 1. **Expected Security Property**:
    - All tool arguments are validated against `contracts/tool_schemas.py` (`StrictModel` with `extra="forbid"`, `PositiveMoney` with `gt=0, max_digits=16, decimal_places=2`, `ID` with `min_length=1, max_length=128`, `currency: Literal["CNY"] = "CNY"`, and `period` regex `^\d{4}-(0[1-9]|1[0-2])$`).
-   - Negative, zero, `-0.00`, `NaN`, `Inf`, `-Inf`, $>2$ decimal places, $>16$ digits, lowercase `"cny"`, `"USD"`, missing/null/empty IDs, IDs $>128$ chars, and injected fields (`bypass_mfa`, `admin`, `mfa_verified`, `action_id`, `action_digest`, `tier`) must be rejected with `INVALID_TOOL_ARGUMENTS`.
+   - Negative, zero, `-0.00`, `NaN`, `Inf`, `-Inf`, $>2$ decimal places, $>16$ digits, lowercase `"cny"`, `"USD"`, missing/null/empty IDs, IDs $>128$ chars, and injected fields (`bypass_mfa`, `admin`, `mfa_verified`, `user_id`, `action_id`, `action_digest`, `tier`) must be rejected with `INVALID_TOOL_ARGUMENTS`.
 2. **Existing Test / Evidence**:
-   - [security/tests/test_policy.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/security/tests/test_policy.py): Verified within the 84 passing collected test items (specifically across Sections 8, 9, 14, 19, and 20) and 14 passing contract tests in [tests/test_contracts.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/tests/test_contracts.py).
-   - [backend/tests/test_security_bridge.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_bridge.py): `test_meaningful_distinction_between_mock_and_real_policy_decisions`, `test_create_action_record_with_real_policy_preserves_reason_codes`.
-3. **Current Status**: **PASS** (in Opt-in Real Policy Mode `use_mock=False`) / **FAIL** (in Default Mock Policy Runtime `USE_MOCK_SECURITY="true"`, where `MockSecurityAdapter` does not enforce `extra="forbid"` or canonical tool schemas).
+   - [security/tests/test_policy.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/security/tests/test_policy.py) (**84 passed**) and [tests/test_contracts.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/tests/test_contracts.py) (**14 passed**).
+   - [backend/tests/test_security_bridge.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_bridge.py) (**27 passed**): `test_meaningful_distinction_between_mock_and_real_policy_decisions`, `test_create_action_record_with_real_policy_preserves_reason_codes`.
+   - [backend/tests/test_security_integration.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_integration.py) (**16 passed**): `test_invalid_agent_arguments_do_not_issue_tickets` (verifying over HTTP `/api/v1/chat` that `-1.00`, `1.001`, injected `user_id`, and injected `action_id` are rejected with `INVALID_TOOL_ARGUMENTS` and create `0` DB rows).
+3. **Current Status**: **PASS**
 4. **Responsible Owner**: P4 / P2
-5. **Required Follow-Up**: Enable `USE_MOCK_SECURITY=false` by default after P2 coordination.
+5. **Required Follow-Up**: None.
 
-#### M-02C — In-Place Server Metadata Pollution on `proposal.arguments`
+#### M-02C — Clean `payload_json` Persistence & Stored-Payload Tampering Rejection (`INVALID_STORED_ACTION`)
 1. **Expected Security Property**:
-   - Server approval metadata (`action_id`, `action_digest`, `tier`) must not pollute `ActionProposal.arguments` if that `ActionProposal` instance is ever re-evaluated by `security.policy.evaluate_action` (which enforces `extra="forbid"`).
+   - Server approval metadata (`action_id`, `action_digest`, `tier`) is added to the HTTP response proposal only *after* `create_action_record` validates canonical arguments, evaluates policy, and persists clean `payload_json`.
+   - At execution time (`/confirm` and `/verify`), `_current_policy` re-validates `record.payload_json` against `validate_tool_arguments` and verifies `compute_action_digest(record.tool, payload) == record.action_digest`, rejecting any stored-row tampering with HTTP `403` (`INVALID_STORED_ACTION`).
 2. **Existing Test / Evidence**:
-   - [backend/app/api/chat.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/api/chat.py#L227-L232) mutates `proposal.arguments["action_id"]`, `proposal.arguments["action_digest"]`, and `proposal.arguments["tier"]` in-place after `create_action_record` returns.
-   - [backend/tests/test_policy.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_policy.py#L134-L159) (`test_agent_clean_payload_and_proposal_binding`) verifies that `ActionApprovalModel.payload_json` in the database is saved *before* this mutation and remains clean.
-   - [security/tests/test_policy.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/security/tests/test_policy.py#L1561-L1606) (`test_server_approval_metadata_injected_into_arguments_rejected`) proves that passing polluted arguments to `evaluate_action` fails closed with `INVALID_TOOL_ARGUMENTS`.
-3. **Current Status**: **BLOCKED** (`payload_json` in DB is clean, so execution-time re-evaluation reconstructing from `record.payload_json` is safe, but in-memory `proposal.arguments` in `chat.py` is mutated).
-4. **Responsible Owner**: P2 (Backend)
-5. **Required Follow-Up**: When implementing execution-time policy re-evaluation in `approvals.py`, reconstruct `ActionProposal` from `record.payload_json` (which is unpolluted), not from mutated client/chat payloads.
+   - [backend/tests/test_security_integration.py:134-144](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_integration.py#L134-L144): `test_stored_payload_tampering_blocks_execution`.
+   - [security/tests/test_policy.py:1561-1606](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/security/tests/test_policy.py#L1561-L1606): `test_server_approval_metadata_injected_into_arguments_rejected`.
+3. **Current Status**: **PASS**
+4. **Responsible Owner**: P2 / P4
+5. **Required Follow-Up**: Separating UI tracking fields from `proposal.arguments` into dedicated response fields remains future contract cleanup noted in `docs/app/p4_integration.md`.
 
 ---
 
@@ -145,127 +213,129 @@ Per strict security verification rules:
 
 #### M-03A — Cross-Account Transfer Spoofing (`SOURCE_ACCOUNT_MISMATCH`)
 1. **Expected Security Property**:
-   - If `proposal.arguments["source_account_id"] != context.account_id`, the proposal must be rejected with `allowed_to_proceed=False`, `tier=Tier.RED`, and `reason_code="SOURCE_ACCOUNT_MISMATCH"`. The backend must **never** silently overwrite an explicitly mismatched `source_account_id` with the authenticated user's `account_id`.
+   - If `proposal.arguments["source_account_id"] != context.account_id`, the proposal must be rejected with `allowed_to_proceed=False`, `tier=Tier.RED`, and `reason_code="SOURCE_ACCOUNT_MISMATCH"`.
 2. **Existing Test / Evidence**:
    - [security/tests/test_policy.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/security/tests/test_policy.py): `test_transfer_source_account_mismatch_rejected`, `test_cross_tenant_transfer_source_account_mismatch`.
-   - [backend/tests/test_security_bridge.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_bridge.py#L338-L408): `test_http_chat_differential_proof_mock_allows_vs_real_policy_rejects` proves that over `POST /api/v1/chat`, `policy_service.use_mock=True` accepts `source_account_id="acc_victim_999"` (because `MockSecurityAdapter` ignores `source_account_id` and `actions.py:127` overwrites it after policy evaluation), whereas `policy_service.use_mock=False` rejects it (`status="REJECTED"`, 0 DB rows created).
-3. **Current Status**: **PASS** (in Opt-in Real Policy Mode `use_mock=False`) / **FAIL** (in Default Mock Policy Runtime `USE_MOCK_SECURITY="true"`).
+   - [backend/tests/test_security_bridge.py:338-408](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_bridge.py#L338-L408): `test_http_chat_differential_proof_mock_allows_vs_real_policy_rejects`.
+   - [backend/tests/test_security_integration.py:115-131](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_integration.py#L115-L131): `test_invalid_agent_arguments_do_not_issue_tickets[{"source_account_id": "foreign_account"}, "SOURCE_ACCOUNT_MISMATCH"]`.
+3. **Current Status**: **PASS**
 4. **Responsible Owner**: P4 / P2
-5. **Required Follow-Up**: P2 to validate or default `source_account_id` only when absent/null prior to policy evaluation without overwriting an explicit mismatched value, and switch `USE_MOCK_SECURITY` default to `"false"`.
+5. **Required Follow-Up**: None.
 
 #### M-03B — Cross-Account Read-Only Query (`ACCOUNT_MISMATCH`)
 1. **Expected Security Property**:
    - Read-only tool calls (`get_balance`, `analyze_spending`, `list_subscriptions`) specifying `account_id != context.account_id` must be rejected with `ACCOUNT_MISMATCH`.
 2. **Existing Test / Evidence**:
    - [security/tests/test_policy.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/security/tests/test_policy.py): `test_get_balance_account_mismatch_rejected`, `test_cross_tenant_query_account_mismatch`, `test_analyze_spending_account_mismatch_rejected`, `test_list_subscriptions_account_mismatch_rejected`.
-   - [backend/app/api/chat.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/api/chat.py#L110-L171): `chat.py` does not call `policy_service.evaluate()` for read-only tools (see M-01B).
-3. **Current Status**: **PASS** (Policy Layer) / **BLOCKED** (Runtime HTTP `chat.py` Layer).
+   - [backend/app/api/chat.py:114-129](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/api/chat.py#L114-L129): `chat.py` validates read tool arguments and invokes `policy_service.evaluate(proposal, read_context)`. `test_locked_balance_read_still_calls_real_p4` ([backend/tests/test_security_integration.py:164-172](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_integration.py#L164-L172)) verifies that `/api/v1/chat` invokes real P4 on `GET_BALANCE`.
+3. **Current Status**: **PASS** (Policy Layer & `GET_BALANCE` HTTP policy invocation) / **PARTIAL** (Cross-account read rejection over HTTP is wired in `chat.py:114-129` but not separately parameterized in `test_security_integration.py`).
 4. **Responsible Owner**: P2 / P4
-5. **Required Follow-Up**: Route read-only proposals through `policy_service.evaluate()` in `chat.py`.
+5. **Required Follow-Up**: Optional HTTP test case for mismatched `account_id` on read tools.
 
 #### M-03C — Locked-Account Rejection at Proposal Time (`ACCOUNT_LOCKED`)
 1. **Expected Security Property**:
-   - When `context.account_locked=True` (populated from `UserModel.is_locked`), all state-changing proposals (`request_transfer`, `request_subscription_cancel`) are rejected with `ACCOUNT_LOCKED` (`allowed_to_proceed=False`, `tier=Tier.RED`). Read-only queries are allowed by default (`READ_ONLY_ACCESS`) unless `PolicyConfig(lock_denies_read_only=True)` is configured.
+   - When `context.account_locked=True` (populated from `UserModel.is_locked`), all state-changing proposals (`request_transfer`, `request_subscription_cancel`) are rejected with `ACCOUNT_LOCKED` (`allowed_to_proceed=False`, `tier=Tier.RED`). Read-only queries remain available by default (`READ_ONLY_ACCESS`) unless `PolicyConfig(lock_denies_read_only=True)` is configured.
 2. **Existing Test / Evidence**:
    - [security/tests/test_policy.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/security/tests/test_policy.py): `test_t11_locked_account_rejects_transfer`, `test_locked_account_rejects_subscription_cancellation`, `test_locked_account_allows_read_only_by_default`, `test_locked_account_denies_read_only_when_configured`, `test_locked_account_read_only_tools_analyze_and_subscriptions`, `test_locked_account_precedes_source_account_mismatch`.
-   - [backend/tests/test_policy.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_policy.py#L86-L109): `test_locked_user_can_check_balance_but_cannot_transfer` (exercises `POST /api/v1/chat` under default `policy_service.use_mock=True` and `agent_service.use_mock=True`).
-3. **Current Status**: **PASS** (Pure Policy `use_mock=False` & Default Mock HTTP) / **BLOCKED** (Real-Policy HTTP with `USE_MOCK_AGENT=true`, because `MockAgentAdapter` omits `source_account_id`, causing Step 3 `INVALID_TOOL_ARGUMENTS` to fire before Step 4 `ACCOUNT_LOCKED`).
+   - [backend/tests/test_security_integration.py:164-172](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_integration.py#L164-L172): `test_locked_balance_read_still_calls_real_p4`.
+   - [backend/tests/test_policy.py:86-109](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_policy.py#L86-L109): `test_locked_user_can_check_balance_but_cannot_transfer` (passes within the 133-passed broader backend suite under default `USE_MOCK_SECURITY=false`).
+3. **Current Status**: **PASS**
 4. **Responsible Owner**: P4 / P2
-5. **Required Follow-Up**: Populate `source_account_id` in `MockAgentAdapter`; see M-05 for execution-time (`/confirm`) lock enforcement.
+5. **Required Follow-Up**: None.
 
 ---
 
 ### Scenario 4: Real Policy Evaluation Through the Backend Adapter
 
-#### M-04A & M-04B — `SecurityAdapterService` Configuration & Runtime Bridge
+#### M-04A & M-04B — `SecurityAdapterService` Configuration & Default Real Policy Mode
 1. **Expected Security Property**:
    - `SecurityAdapterService(use_mock: bool | None = None)` strictly validates `use_mock` (raising `ValueError` on non-booleans) and `USE_MOCK_SECURITY` (accepting only case-insensitive `"true"` or `"false"`, raising `ValueError` on any other string or whitespace-padded value).
-   - When `use_mock=False` (or `USE_MOCK_SECURITY=false`), `SecurityAdapterService.evaluate` delegates directly to `security.policy.evaluate_action(proposal, context)`.
-   - Note: In current runtime configuration ([backend/app/services/adapters.py:151](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/services/adapters.py#L151)), `USE_MOCK_SECURITY` defaults to `"true"`, so `policy_service` uses `MockSecurityAdapter` unless `USE_MOCK_SECURITY=false` or `use_mock=False` is explicitly configured.
+   - When `USE_MOCK_SECURITY` is unset, `SecurityAdapterService` defaults to `use_mock=False` ([backend/app/services/adapters.py:151](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/services/adapters.py#L151)), selecting the real P4 policy engine by default.
+   - `MockAgentAdapter` ([backend/app/mocks/agent.py:70,133,164](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/mocks/agent.py#L70)) includes `source_account_id`, so default mock-agent tests and MFA suites run against the real P4 policy engine without regression.
 2. **Existing Test / Evidence**:
-   - [backend/app/services/adapters.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/services/adapters.py#L143-L166).
-   - [backend/tests/test_security_bridge.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_bridge.py): All 27 test items passing (`test_security_adapter_environment_and_default_selection`, `test_security_adapter_rejects_invalid_env_values_and_allows_explicit_override`, `test_security_adapter_rejects_non_boolean_constructor_arguments`, `test_real_mode_invokes_security_policy_evaluate_action_spy`, `test_http_chat_differential_proof_mock_allows_vs_real_policy_rejects`, `test_http_chat_real_p1_agent_with_real_p4_policy_end_to_end`).
-3. **Current Status**:
-   - **M-04A**: **PASS** (in Opt-in Real Policy Mode `USE_MOCK_SECURITY=false` / `use_mock=False`; disabled by default because `USE_MOCK_SECURITY` defaults to `"true"`).
-   - **M-04B**: **BLOCKED** (Flipping default `USE_MOCK_SECURITY` from `"true"` to `"false"` while `USE_MOCK_AGENT=true`, because `MockAgentAdapter` in [backend/app/mocks/agent.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/mocks/agent.py) omits `source_account_id`).
+   - [backend/tests/test_security_bridge.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_bridge.py): **27 passed** (`test_security_adapter_environment_and_default_selection`, `test_security_adapter_rejects_invalid_env_values_and_allows_explicit_override`, `test_security_adapter_rejects_non_boolean_constructor_arguments`, `test_real_mode_invokes_security_policy_evaluate_action_spy`, `test_http_chat_differential_proof_mock_allows_vs_real_policy_rejects`, `test_http_chat_real_p1_agent_with_real_p4_policy_end_to_end`).
+   - [backend/tests/test_security_integration.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_integration.py): **16 passed** (`test_mode_selection_is_explicit`).
+   - [backend/tests/test_mfa.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_mfa.py): **18 passed**.
+   - Broader backend suite (`backend/tests` excluding `test_security_concurrency.py`): **133 passed, 7 skipped**.
+3. **Current Status**: **PASS**
 4. **Responsible Owner**: P4 (Adapter Bridge) / P2 (`MockAgentAdapter` & `actions.py`)
-5. **Required Follow-Up**: P2 to populate `source_account_id=account_id` in `MockAgentAdapter` (or in `actions.py` only when `source_account_id` is absent/null), then change the default in `SecurityAdapterService.__init__` to `"false"`.
+5. **Required Follow-Up**: None.
 
 ---
 
 ### Scenario 5: Yellow Confirmation After Account Lock
 
-#### M-05 — TOCTOU Account Lock Between Proposal (`/chat`) and Confirmation (`/confirm`)
+#### M-05 — Account Lock Enforcement After Proposal Creation (`/chat` $\rightarrow$ `/confirm`)
 1. **Expected Security Property**:
-   - If a user's lock flag (`UserModel.is_locked`, mapped to `BankingContext.account_locked`) becomes `True` *after* a Yellow action is proposed (`PENDING_CONFIRMATION`) but *before* `POST /api/v1/actions/{action_id}/confirm` is called, `/confirm` must reject the action (`ActionStatus.REJECTED`, HTTP 403/400) and must not execute the transfer or subscription cancellation.
+   - If `UserModel.is_locked` becomes `True` *after* a Yellow action is proposed (`PENDING_CONFIRMATION`) but *before* `POST /api/v1/actions/{action_id}/confirm` is called, `/confirm` re-evaluates policy via `_current_policy`, marks the action `ActionStatus.REJECTED`, writes an `ACTION_POLICY_REJECTED` audit log (`reason_code="ACCOUNT_LOCKED"`), returns HTTP `403`, and leaves account balance unchanged.
 2. **Existing Test / Evidence**:
-   - Code inspection of [backend/app/api/approvals.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/api/approvals.py#L35-L128) confirms `confirm_action` never checks `user.is_locked` and never re-invokes `policy_service.evaluate()`. At line 117 (`audit_id, message = _execute_action(db, user, record)`), the Yellow action executes even if `user.is_locked == True`.
-3. **Current Status**: **FAIL / UNFIXED** (Confirmed unfixed runtime vulnerability in `backend/app/api/approvals.py`).
+   - Implemented in [backend/app/api/approvals.py:22-89, 164](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/api/approvals.py#L22-L89).
+   - Verified by `test_new_lock_blocks_yellow_confirm` in [backend/tests/test_security_integration.py:106-112](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_integration.py#L106-L112).
+3. **Current Status**: **PASS** (Sequential)
 4. **Responsible Owner**: P2 (Backend) with P4 (Security)
-5. **Required Follow-Up**: In `confirm_action` (`backend/app/api/approvals.py`), reconstruct `ActionProposal` from `record.payload_json` and `BankingContext` from current DB state (`user.is_locked`, fresh `account.balance`, fresh `account.daily_transfer_total`), and call `policy_service.evaluate(proposal, fresh_context)` before `_execute_action`.
+5. **Required Follow-Up**: Pair `_current_policy` with atomic action/account serialization under concurrent execution (see Section 3).
 
 ---
 
 ### Scenario 6: Yellow-to-Red Escalation When Cumulative Daily Transfers Change
 
-#### M-06 — Cumulative Daily Limit Escalation Between Proposal and Confirmation
+#### M-06 — Cumulative Daily Limit Escalation Between Proposal and Confirmation (Sequential vs. Concurrent)
 1. **Expected Security Property**:
-   - Suppose `daily_transfer_total` is `0.00 CNY` and the user proposes two separate `600.00 CNY` transfers (Action A and Action B). Both are initially classified as `Tier.YELLOW` ($600.00 \le 1,000.00$).
-   - After Action A is confirmed and executed (`daily_transfer_total` becomes `600.00 CNY`), confirming Action B (`600.00 + 600.00 = 1,200.00 > 1,000.00 CNY`) must re-evaluate policy against the fresh `daily_transfer_total`, escalate Action B from `Tier.YELLOW` to `Tier.RED`, issue an MFA challenge (`PENDING_MFA`), and refuse immediate execution without MFA.
+   - When two Yellow transfers whose combined amount exceeds `1,000.00 CNY` are proposed while `daily_transfer_total` is low, confirming the second transfer after (or concurrently with) the first must not allow both to execute as Yellow without MFA. The second transfer must re-evaluate against the updated `daily_transfer_total`, escalate from `Tier.YELLOW` to `Tier.RED` (`ActionStatus.PENDING_MFA`), and issue an OTP challenge without debiting funds.
 2. **Existing Test / Evidence**:
-   - Policy layer supports cumulative evaluation (`test_t03_transfer_exceeds_daily_limit_red` in [security/tests/test_policy.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/security/tests/test_policy.py#L241-L266)).
-   - Runtime inspection of [backend/app/api/approvals.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/api/approvals.py#L90-L128) shows `confirm_action` only inspects the static `record.tier == Tier.RED.value` stored at proposal time (line 90) and executes Action B immediately as Yellow at line 117.
-3. **Current Status**: **FAIL / UNFIXED** (Confirmed unfixed runtime TOCTOU vulnerability in `backend/app/api/approvals.py`).
-4. **Responsible Owner**: P2 (Backend) & P3 (MFA) with P4 (Security)
-5. **Required Follow-Up**: Re-evaluate `policy_service.evaluate()` in `confirm_action` against fresh `account.daily_transfer_total`. If `decision.tier == Tier.RED` (`decision.requires_mfa`), update `record.tier = Tier.RED.value` and route through `mfa.issue_challenge(record, now)` returning `ActionStatus.PENDING_MFA`.
+   - **Sequential Escalation (`PASS`)**: Implemented in [`approvals.confirm_action`](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/api/approvals.py#L164-L192) and verified by `test_two_pending_yellow_actions_escalate_after_first_executes` in [backend/tests/test_security_integration.py:87-104](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_integration.py#L87-L104).
+   - **Concurrent Escalation (`FAIL / UNFIXED`)**: `test_concurrent_yellow_transfers_cannot_bypass_cumulative_daily_threshold` in [backend/tests/test_security_concurrency.py:195-343](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_concurrency.py#L195-L343) **fails** because two concurrent `600.00 CNY` confirmations both read stale `daily_transfer_total == 0.00 CNY` in `_current_policy` and both complete as `YELLOW` without MFA (see Section 3, **Defect 2**).
+3. **Current Status**: **PASS (Sequential)** / **FAIL / UNFIXED (Concurrent)**
+4. **Responsible Owner**: P2 (Runtime Serialization) & P3 (MFA) with P4 (Policy & Concurrency Test)
+5. **Required Follow-Up**: P2 to serialize same-account confirmations/executions before reading `daily_transfer_total` in `_current_policy` and `execute_transfer`.
 
 ---
 
-### Scenario 7: Red MFA Verification After Account Lock vs. Execution-Time Policy Re-Evaluation
+### Scenario 7: Red MFA Verification After Account Lock & Execution-Time Policy Re-Evaluation
 
-#### M-07A — Direct `user.is_locked` Check at Red `/verify`
+#### M-07A — Account Lock Check at Red `/verify`
 1. **Expected Security Property**:
-   - If a Red action is confirmed into `PENDING_MFA` and `UserModel.is_locked` becomes `True` before `POST /api/v1/actions/{action_id}/verify` is called with the valid OTP code, `/verify` must reject execution, mark the action `REJECTED`, and leave the account balance unchanged.
+   - If a Red action is in `PENDING_MFA` and `UserModel.is_locked` becomes `True` before `POST /api/v1/actions/{action_id}/verify` is called with the valid OTP code, `/verify` rejects execution (`403`), marks the action `REJECTED`, and leaves the account balance unchanged.
 2. **Existing Test / Evidence**:
-   - Implemented in [backend/app/api/approvals.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/api/approvals.py#L216-L222) via a direct check `if user.is_locked:` (`record.status = ActionStatus.REJECTED.value ... raise HTTPException(status_code=403)`).
-   - Verified by `test_account_locked_after_confirm_blocks_execution` in [backend/tests/test_mfa.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_mfa.py#L227-L237).
-3. **Current Status**: **PASS** (Direct `user.is_locked` check at `/verify`).
-4. **Responsible Owner**: P3 (MFA)
-5. **Required Follow-Up**: None for the boolean `user.is_locked` check itself; see M-07B for full policy re-evaluation.
+   - Implemented via `_current_policy(db, user, record)` at [backend/app/api/approvals.py:302](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/api/approvals.py#L302).
+   - Verified by `test_account_locked_after_confirm_blocks_execution` in [backend/tests/test_mfa.py:227-237](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_mfa.py#L227-L237).
+3. **Current Status**: **PASS**
+4. **Responsible Owner**: P3 / P2
+5. **Required Follow-Up**: None.
 
-#### M-07B — Execution-Time Policy Re-Evaluation (`policy_service.evaluate`) in `/confirm` and `/verify`
+#### M-07B — Execution-Time Policy Re-Evaluation (`_current_policy`) in `/confirm` and `/verify`
 1. **Expected Security Property**:
-   - Both `/confirm` and `/verify` should re-run `policy_service.evaluate(reconstructed_proposal, fresh_context)` against live database state prior to executing any state mutation.
+   - Both `/confirm` and `/verify` reconstruct `ActionProposal` from `record.payload_json`, verify `action_digest`, refresh user/account state, and call `policy_service.evaluate(proposal, context)` prior to executing any state mutation. A valid OTP cannot override a policy rejection at `/verify`.
 2. **Existing Test / Evidence**:
-   - Code inspection of [backend/app/api/approvals.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/api/approvals.py#L89-L128) and [L223-L224](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/api/approvals.py#L223-L224) confirms that `policy_service.evaluate` is **not** called in either `confirm_action` or `verify_action` (lines 223–224 contain only `# TODO(P4): re-run security.policy.evaluate_action against the current BankingContext here once the real policy bridge replaces the mock`).
-3. **Current Status**: **FAIL / UNFIXED** (Not implemented in runtime code).
-4. **Responsible Owner**: P2 (Backend) & P3 (MFA) with P4 (Security)
-5. **Required Follow-Up**: Implement execution-time policy re-evaluation in both `confirm_action` and `verify_action` in `backend/app/api/approvals.py`.
+   - Implemented in [backend/app/api/approvals.py:22-89, 164, 302](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/api/approvals.py#L22-L89).
+   - Verified by `test_confirm_rechecks_real_policy_and_replays_without_new_debit` and `test_policy_rejection_at_verify_cannot_be_overridden_by_correct_otp` in [backend/tests/test_security_integration.py:77-85, 146-162](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_integration.py#L77-L85).
+3. **Current Status**: **PASS (Sequential)** (Does not provide concurrent account/action serialization; see **M-08B** and **M-09**).
+4. **Responsible Owner**: P2 / P3 / P4
+5. **Required Follow-Up**: Pair `_current_policy` with account-level locking/serialization (P2).
 
 ---
 
-### Scenario 8: Concurrent Confirmation of the Same Action
+### Scenario 8: Concurrent Confirmation / Verification of the Same Action
 
 #### M-08A — Concurrent Red MFA Verification (`POST /api/v1/actions/{action_id}/verify`)
 1. **Expected Security Property**:
-   - Two simultaneous `/verify` requests submitting the valid OTP for the same `action_id` must result in at most one execution (`COMPLETED`) and one `409 Conflict` rejection, debiting the account exactly once.
+   - Two simultaneous `/verify` requests submitting the valid OTP for the **same `action_id`** must result in at most one execution (`COMPLETED`) and one `409 Conflict` rejection, debiting the account once.
 2. **Existing Test / Evidence**:
-   - Implemented via atomic conditional SQL update in [backend/app/services/mfa.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/services/mfa.py#L110-L127) (`claim_challenge`).
-   - Verified by `test_concurrent_verify_loser_is_rejected_without_debit` and multi-threaded `test_truly_concurrent_verifies_debit_once` in [backend/tests/test_mfa.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_mfa.py#L150-L163) and [L270-L344](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_mfa.py#L270-L344).
-3. **Current Status**: **PASS**
-4. **Responsible Owner**: P3 (MFA)
-5. **Required Follow-Up**: None for single-action Red `/verify` claim.
+   - Implemented via atomic conditional SQL update in [backend/app/services/mfa.py:110-132](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/services/mfa.py#L110-L132) (`claim_challenge`).
+   - Verified on file-backed SQLite by `test_concurrent_verify_loser_is_rejected_without_debit` and multi-threaded `test_truly_concurrent_verifies_debit_once` in [backend/tests/test_mfa.py:150-163, 338-414](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_mfa.py#L338-L414).
+3. **Current Status**: **PASS (Same-Action on File-Backed SQLite)** / **NOT VERIFIED (PostgreSQL)**. *(Note: Concurrent `/verify` calls across two **different** Red `action_id`s on the same account still depend on P2's `execute_transfer` account serialization under **M-09**.)*
+4. **Responsible Owner**: P3 (MFA) / P2 (Executor Account Serialization)
+5. **Required Follow-Up**: P2 account serialization in `executor.py` for cross-action Red `/verify`; PostgreSQL concurrency verification remains unverified.
 
 #### M-08B — Concurrent Yellow Confirmation of the Same Action (`POST /api/v1/actions/{action_id}/confirm`)
 1. **Expected Security Property**:
-   - Two simultaneous `/confirm` requests for the **same `action_id`** in `PENDING_CONFIRMATION` must result in at most one execution; the second concurrent request must not execute `_execute_action` a second time.
+   - Two simultaneous `/confirm` requests for the **same `action_id`** in `PENDING_CONFIRMATION` must result in at most one transfer execution and debit (`tx_count == 1`, `audit_count == 1`), with the second request receiving `409 Conflict` or returning the idempotent `COMPLETED` result with the same `audit_id`.
 2. **Existing Test / Evidence**:
-   - Sequential replay after completion is tested in `test_atomic_money_transfer_and_idempotency` ([backend/tests/test_execution.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_execution.py#L48-L61)).
-   - Code inspection of [backend/app/api/approvals.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/api/approvals.py#L42-L121) shows that `confirm_action` reads `record` with a non-locking `SELECT` (line 42), checks `record.status != ActionStatus.PENDING_CONFIRMATION.value` in Python (line 73), runs `_execute_action` (line 117), and only sets `record.status = ActionStatus.COMPLETED.value` at line 119 before `db.commit()` at line 121. Unlike `mfa.claim_challenge`, there is no atomic conditional `UPDATE action_approvals SET status = ... WHERE action_id = :id AND status = 'PENDING_CONFIRMATION'` prior to `_execute_action`.
-   - No dedicated multi-threaded test currently exercises concurrent `/confirm` calls on the same `action_id`.
-3. **Current Status**: **FAIL / UNFIXED** (Unprotected TOCTOU window confirmed by code inspection; concurrent race **NOT TESTED** by an automated multi-threaded test).
-4. **Responsible Owner**: P2 (Backend)
-5. **Required Follow-Up**: Add an atomic conditional `UPDATE` claim on `ActionApprovalModel` (`WHERE action_id == action_id AND status == 'PENDING_CONFIRMATION'`) before calling `_execute_action` in `approvals.py`, and add a two-thread barrier test for `/confirm`.
+   - Sequential replay after completion passes (`test_confirm_rechecks_real_policy_and_replays_without_new_debit` in [backend/tests/test_security_integration.py:77-85](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_integration.py#L77-L85)).
+   - Concurrent execution **fails** in `test_concurrent_duplicate_yellow_confirm_executes_at_most_once` ([backend/tests/test_security_concurrency.py:70-192](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_concurrency.py#L70-L192)): both threads execute `execute_transfer`, creating 2 ledger transactions and 2 execution audit entries (see Section 3, **Defect 1**).
+3. **Current Status**: **FAIL / UNFIXED** (Reproduced on file-backed SQLite; PostgreSQL concurrency **NOT VERIFIED**).
+4. **Responsible Owner**: P2 (Backend Runtime) / P4 (Regression Test)
+5. **Required Follow-Up**: P2 to add an atomic conditional claim on `ActionApprovalModel` and account serialization before `_execute_action`.
 
 ---
 
@@ -273,22 +343,16 @@ Per strict security verification rules:
 
 #### M-09 — Competing Transfers Across Different `action_id`s on the Same Account
 1. **Expected Security Property**:
-   - Concurrent confirmations/verifications of two **different transfer actions (`act_1` and `act_2`)** drawing from the same `account_id` must serialize balance deductions and `daily_transfer_total` updates so that:
-     1. The account balance cannot be overdrawn (`balance < 0`) by two competing transfers that individually pass `account.balance < amount`.
-     2. Two competing transfers cannot corrupt or bypass `daily_transfer_total` accounting by reading and overwriting the same stale `AccountModel` row.
+   - Concurrent confirmations/verifications of two **different transfer actions (`act_1` and `act_2`)** drawing from the same `account_id` must serialize policy re-evaluation, balance checks, and `daily_transfer_total` updates so that:
+     1. Two concurrent Yellow transfers (`600 CNY + 600 CNY > 1,000 CNY`) cannot both pass `_current_policy` as Yellow and execute without MFA.
+     2. Two concurrent transfers (`400 CNY + 400 CNY > 500 CNY` balance) cannot both pass `account.balance < amount` in `execute_transfer` and overdraw/corrupt the account balance and daily transfer total.
 2. **Existing Test / Evidence**:
-   - Code inspection of [backend/app/services/executor.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/services/executor.py#L28-L50) shows a non-atomic read-modify-write pattern on `AccountModel`:
-     ```python
-     account = db.query(AccountModel).filter(...).first()
-     if account.balance < amount:
-         raise HTTPException(...)
-     account.balance -= amount
-     account.daily_transfer_total += amount
-     ```
-   - No row-level lock or conditional SQL update (`UPDATE accounts SET balance = balance - :amount, daily_transfer_total = daily_transfer_total + :amount WHERE account_id = :id AND balance >= :amount`) is used, and no automated concurrency test exercises two distinct `action_id`s against the same account.
-3. **Current Status**: **FAIL / UNFIXED** (Non-atomic account update confirmed by code inspection; concurrent race **NOT TESTED** by an automated multi-threaded test).
-4. **Responsible Owner**: P2 (Backend)
-5. **Required Follow-Up**: Replace the in-memory balance/daily-total mutation in `executor.py` with an atomic conditional SQL `UPDATE` on `AccountModel` checking `AccountModel.balance >= amount`, and add a two-thread concurrency test across two distinct `action_id`s.
+   - Reproduced as **failing** in [backend/tests/test_security_concurrency.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_concurrency.py):
+     - `test_concurrent_yellow_transfers_cannot_bypass_cumulative_daily_threshold` (**FAILED** — see Section 3, **Defect 2**).
+     - `test_concurrent_transfers_exceeding_balance_cannot_both_succeed` (**FAILED** — see Section 3, **Defect 3**).
+3. **Current Status**: **FAIL / UNFIXED** (Reproduced on file-backed SQLite; PostgreSQL concurrency **NOT VERIFIED**).
+4. **Responsible Owner**: P2 (Backend Runtime) / P4 (Regression Test)
+5. **Required Follow-Up**: P2 to implement account-level serialization and atomic conditional balance/daily-total updates in `approvals.py` and `executor.py`.
 
 ---
 
@@ -299,19 +363,18 @@ Per strict security verification rules:
    - Every policy decision returns an explicit `SecurityReasonCode` (`security/rules.py:15-40`).
    - Every executed transfer, subscription cancellation, and issued MFA challenge creates an `AuditLogModel` record linked by `action_id`, `user_id`, `payload_digest`, and `audit_id`.
 2. **Existing Test / Evidence**:
-   - Policy reason codes: Verified across all 84 passing collected test items in [security/tests/test_policy.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/security/tests/test_policy.py) and `test_create_action_record_with_real_policy_preserves_reason_codes` in [backend/tests/test_security_bridge.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_bridge.py#L233-L336).
-   - Execution audit linkage: Verified in `test_atomic_money_transfer_and_idempotency` ([backend/tests/test_execution.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_execution.py#L62-L69)) and `test_red_transfer_debits_once_only_after_valid_mfa` ([backend/tests/test_mfa.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_mfa.py#L97-L100)).
+   - Verified across **84 passed** tests in [security/tests/test_policy.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/security/tests/test_policy.py), **27 passed** tests in [backend/tests/test_security_bridge.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_bridge.py), and **18 passed** tests in [backend/tests/test_mfa.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_mfa.py).
 3. **Current Status**: **PASS**
 4. **Responsible Owner**: P4 / P2 / P3
-5. **Required Follow-Up**: None for successful execution audit logs.
+5. **Required Follow-Up**: None for sequential execution audit logs.
 
-#### M-10B — Rejection Audit Logging and Reason Code Fidelity in `POST /api/v1/chat` and `/confirm`
+#### M-10B — Rejection Reason Code Surfacing in `POST /api/v1/chat` and Execution-Time Rejection Auditing
 1. **Expected Security Property**:
-   - When `create_action_record` rejects a proposal with `ValueError(f"Action blocked by policy: {decision.reason_code}")`, `POST /api/v1/chat` should record an audit event with `decision.reason_code` and return an accurate rejection message rather than assuming every rejection is an account lock.
-   - Security rejections during `/confirm` (digest tampering) and `/verify` (3x wrong OTP lockout, locked account at execution time) should also write `AuditLogModel` records.
+   - When `create_action_record` rejects a proposal with `PolicyRejected(reason_code)`, `POST /api/v1/chat` surfaces the specific `reason_code` and explanation in `ChatOutput.reply` with `status=ActionStatus.REJECTED` (rather than claiming every rejection is an account lock).
+   - Execution-time policy rejections in `_current_policy` (`/confirm` and `/verify`) record an `AuditLogModel` entry (`action_type="ACTION_POLICY_REJECTED"`, `reason_code=reason`).
 2. **Existing Test / Evidence**:
-   - Code inspection of [backend/app/api/chat.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/api/chat.py#L234-L240) shows that `except ValueError as e:` ignores `e`, writes no `AuditLogModel` entry, and always returns `"Action blocked: Your account is currently locked for state-changing operations."` even when the actual reason code was `SOURCE_ACCOUNT_MISMATCH`, `INVALID_TOOL_ARGUMENTS`, or `UNKNOWN_TOOL`.
-   - Code inspection of [backend/app/api/approvals.py](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/api/approvals.py#L54-L60) and [L201-L222](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/api/approvals.py#L201-L222) shows status updates to `REJECTED` / `FAILED` without `db.add(AuditLogModel(...))`.
-3. **Current Status**: **FAIL / UNFIXED** (Rejection reason codes are masked by a static message in `chat.py` and rejected actions are not recorded in `AuditLogModel`).
-4. **Responsible Owner**: P2 (Backend) & P3 (MFA)
-5. **Required Follow-Up**: P2 to log `AuditLogModel` on policy rejection in `chat.py` (preserving `decision.reason_code`) and on digest mismatch in `approvals.py`; P3 to log `AuditLogModel` on MFA lockout and execution-time lock rejection in `approvals.py`.
+   - Implemented in [backend/app/api/chat.py:242-259](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/api/chat.py#L242-L259) and [backend/app/api/approvals.py:81-88](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/app/api/approvals.py#L81-L88).
+   - Verified by `test_invalid_agent_arguments_do_not_issue_tickets` (`assert reason in result["reply"] and "account is currently locked" not in result["reply"]`) in [backend/tests/test_security_integration.py:115-131](file:///C:/Users/Admin/Documents/AI Banking Agent/ai-banking-agent/backend/tests/test_security_integration.py#L115-L131).
+3. **Current Status**: **PASS**
+4. **Responsible Owner**: P2 / P3 / P4
+5. **Required Follow-Up**: None.
