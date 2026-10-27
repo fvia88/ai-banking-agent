@@ -30,12 +30,12 @@ def fixture_context() -> BankingContext:
 
 
 def test_security_adapter_environment_and_default_selection(monkeypatch):
-    """Verifies default mock mode, valid case-insensitive USE_MOCK_SECURITY values, and overrides."""
+    """Verifies default real mode, valid case-insensitive USE_MOCK_SECURITY values, and overrides."""
     assert isinstance(policy_service, SecurityAdapterService)
 
     monkeypatch.delenv("USE_MOCK_SECURITY", raising=False)
     default_adapter = SecurityAdapterService()
-    assert default_adapter.use_mock is True
+    assert default_adapter.use_mock is False
 
     for false_val in ("false", "FALSE", "False", "fAlSe"):
         monkeypatch.setenv("USE_MOCK_SECURITY", false_val)

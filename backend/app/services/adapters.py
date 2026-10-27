@@ -142,13 +142,13 @@ class AgentAdapterService:
 
 class SecurityAdapterService:
     def __init__(self, use_mock: bool | None = None):
-        # Reads USE_MOCK_SECURITY env var (default: True)
+        # Reads USE_MOCK_SECURITY env var (default: False)
         if use_mock is not None:
             if not isinstance(use_mock, bool):
                 raise ValueError(f"Invalid use_mock={use_mock!r}; expected a boolean or None")
             self.use_mock = use_mock
         else:
-            raw_mode = os.getenv("USE_MOCK_SECURITY", "true")
+            raw_mode = os.getenv("USE_MOCK_SECURITY", "false")
             normalized_mode = raw_mode.lower()
             if normalized_mode == "true":
                 self.use_mock = True
