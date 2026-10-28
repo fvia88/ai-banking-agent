@@ -66,8 +66,24 @@ def _request_text(message: str) -> str:
 
 def is_abandonment(message: str) -> bool:
     """A standalone draft-abandonment command, never an action revocation."""
-    text = " ".join(message.strip().casefold().split()).rstrip('.!?').strip()
+    text = " ".join(message.strip().casefold().replace('’', "'").split()).rstrip('.!?').strip()
     if text in {'nvm', 'nvr mind', 'nvrmind'}:
+        return True
+    # Whole utterances only: 'stop my subscription' and 'no, send 50 to Bob'
+    # must not be mistaken for abandoning the current draft.
+    withdrawal = (
+        r"(?:no|nah|nope)(?: thanks| thank you)?"
+        r"|stop(?: here| now| this| that| it| this request| the request| my request)?"
+        r"|(?:cancel|discard|drop) (?:it|this|that|this request|the request|my request)"
+        r"|forget (?:it|this|that|about it|about that|this request)"
+        r"|(?:i )?(?:don't|dont|do not) want(?:(?: (?:it|this|that)(?: anymore)?)|(?: to(?: continue| proceed| do (?:it|this|that))?(?: anymore)?)| anymore)?"
+        r"|(?:don't|dont|do not) bother"
+        r"|(?:scrap|leave) (?:it|this|that)"
+        r"|i(?:'ve| have)? changed my mind"
+        r"|let's stop(?: here)?"
+    )
+    if re.fullmatch(r'(?:(?:please|pls|plz) )?(?:(?:no|nah|nope),? )?(?:' + withdrawal
+                    + r')(?:,? (?:please|pls|plz|thanks|thank you))?', text):
         return True
     words = text.split()
     return ((len(words) == 2 and words[0] == 'never' and _one_typo(words[1], 'mind'))

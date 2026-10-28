@@ -223,7 +223,7 @@ def test_abandonment_clears_pending_draft_without_calling_provider(monkeypatch, 
         raise ProviderError("Abandonment should not need Gemini")
     monkeypatch.setattr(service, "get_provider", unavailable)
     turn = service.process_turn(ChatInput(conversation_id="c1", message=command), catalog)
-    assert turn.result.reply == "Unfinished request discarded."
+    assert turn.result.reply == "Noted, I've discarded your unfinished request."
     assert not turn.result.proposals and not turn.result.needs_clarification
     assert turn.state.pending_transfer is None and turn.state.awaiting is None
     assert catalog == before  # Caller must retain the returned cleared snapshot.
@@ -258,9 +258,48 @@ def test_abandonment_after_proposal_does_not_claim_action_cancellation(monkeypat
     proposal = proposed.result.proposals[0].model_dump(mode="json")
     supply(catalog, proposed.state)
     result = service.process_turn(ChatInput(conversation_id="c1", message="never mind"), catalog)
-    assert result.result.reply == "No worries 🙂 What would you like to do next?"
+    assert result.result.reply.startswith("No worries 🙂")
+    assert 'approval cards are unchanged' in result.result.reply
     assert not result.result.proposals
     assert proposed.result.proposals[0].model_dump(mode="json") == proposal
+
+
+@pytest.mark.parametrize('message', ['stop', 'Stop!', 'please stop', 'stop this request',
+    'no', 'no thanks', "no, i don't want", "I don’t want to continue", 'dont want it',
+    'forget it', 'please forget about it', 'drop this request', 'cancel this',
+    "I've changed my mind", 'I changed my mind', 'nah, forget it', 'nope thanks',
+    'discard my request please', 'nvr mind', "I don't want to do this anymore",
+    "don't bother", 'scrap that'])
+def test_natural_withdrawal_discards_draft_without_provider(monkeypatch, message):
+    catalog, state = initial(monkeypatch)
+    supply(catalog, state)
+    def unavailable():
+        raise AssertionError('Stopping a draft should be local')
+    monkeypatch.setattr(service, 'get_provider', unavailable)
+    turn = service.process_turn(ChatInput(conversation_id='c1', message=message), catalog)
+    assert turn.result.reply == "Noted, I've discarded your unfinished request."
+    assert turn.state.pending_transfer is None and turn.state.awaiting is None
+    assert not turn.result.proposals
+
+
+@pytest.mark.parametrize('message', ['stop my subscription', 'cancel StreamBox',
+    'no, send 50 to Bob', 'do not stop', 'never stop', 'stop if Alice asks',
+    'forget it then send 50 to Bob', 'the merchant says stop', '"stop"',
+    "I don't want Netflix", 'my note says forget it'])
+def test_withdrawal_matches_whole_request_only(message):
+    from agent.request_guard import is_abandonment
+    assert not is_abandonment(message)
+
+
+@pytest.mark.parametrize('message', ['stop', "I don't want it", 'forget it'])
+def test_withdrawal_preserves_issued_approval_cards(monkeypatch, message):
+    monkeypatch.setenv('AGENT_PROVIDER', 'mock')
+    catalog = demo_catalog()
+    issued = service.process_turn(ChatInput(conversation_id='issued', message='Transfer 50 to Bob'), catalog)
+    supply(catalog, issued.state)
+    turn = service.process_turn(ChatInput(conversation_id='issued', message=message), catalog)
+    assert turn.state == issued.state and not turn.result.proposals
+    assert 'approval cards are unchanged' in turn.result.reply
 
 
 @pytest.mark.parametrize("first_to_finish", ["conversation_a", "conversation_b"])
@@ -419,7 +458,8 @@ def test_common_abandonment_variants_are_local_and_preserve_issued_requests(monk
         raise AssertionError('Abandoning a draft must not need the provider')
     monkeypatch.setattr(service, 'get_provider', unavailable)
     turn = service.process_turn(ChatInput(conversation_id='c1', message=command), catalog)
-    assert turn.result.reply == 'Unfinished request discarded.'
+    assert turn.result.reply.startswith("Noted, I've discarded your unfinished request.")
+    assert 'approval cards are unchanged' in turn.result.reply
     assert not turn.result.proposals
     assert turn.state.pending_transfer is None
     assert turn.state.pending_tool_requests == issued.state.pending_tool_requests

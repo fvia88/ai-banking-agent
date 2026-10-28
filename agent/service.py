@@ -210,9 +210,11 @@ def process_turn(chat: ChatInput, tool_catalog: list[dict],
         # not approval, execution, or subscription cancellation. Do not swallow
         # an execution result if this call is actually processing tool results.
         if not tool_results and is_abandonment(chat.message):
-            reply = ("Unfinished request discarded." if any(draft is not None for draft in
+            reply = ("Noted, I've discarded your unfinished request." if any(draft is not None for draft in
                      (original.pending_transfer, original.pending_spending, original.pending_cancellation))
                      else "No worries 🙂 What would you like to do next?")
+            if original.pending_tool_requests:
+                reply += " Existing approval cards are unchanged. Use the action card to cancel an approval."
             return ConversationTurn(result=AgentResult(reply=reply),
                                     state=ConversationState(conversation_id=chat.conversation_id,
                                         pending_tool_requests=original.pending_tool_requests))

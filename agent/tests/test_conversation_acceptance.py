@@ -68,7 +68,7 @@ def test_p1_rehearsal(monkeypatch):
     assert turn.result.needs_clarification and not turn.result.proposals
     turn = send(safety, 'rehearsal_safety', 'never mind')
     assert not turn.result.proposals and turn.state.pending_transfer is None
-    assert turn.result.reply == 'Unfinished request discarded.'
+    assert turn.result.reply == "Noted, I've discarded your unfinished request."
     print('\nPASS: all rehearsal checks passed. Transfers/cancellations were proposals only.')
 
 
@@ -426,7 +426,7 @@ def test_cancellation_rechecks_current_context(monkeypatch, change):
 def test_cancellation_abandonment_does_not_cancel_subscription(monkeypatch):
     catalog, first = start_cancellation(monkeypatch)
     discarded = process_turn(ChatInput(conversation_id='cancel_memory', message='never mind'), catalog)
-    assert discarded.result.reply == 'Unfinished request discarded.'
+    assert discarded.result.reply == "Noted, I've discarded your unfinished request."
     assert not discarded.result.proposals and discarded.state.pending_cancellation is None
     save_state(catalog, discarded)
     assert not process_turn(ChatInput(conversation_id='cancel_memory', message='StreamBox'), catalog).result.proposals
@@ -547,7 +547,7 @@ def test_unknown_and_ambiguous_recipients_are_distinguished(monkeypatch, message
 def test_spending_abandonment_clears_draft(monkeypatch):
     catalog, first = start_spending(monkeypatch)
     discarded = process_turn(ChatInput(conversation_id='spending_memory', message='never mind'), catalog)
-    assert discarded.result.reply == 'Unfinished request discarded.'
+    assert discarded.result.reply == "Noted, I've discarded your unfinished request."
     assert discarded.state.pending_spending is None and discarded.state.awaiting is None
     save_state(catalog, discarded)
     late = process_turn(ChatInput(conversation_id='spending_memory', message='2026-11'), catalog)
