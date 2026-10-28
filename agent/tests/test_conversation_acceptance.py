@@ -40,7 +40,7 @@ def test_p1_rehearsal(monkeypatch):
     assert '1843.00' not in rejected.result.reply
     print('Check: September report rejected; October request remains pending.')
     accepted = send(spending, chat.conversation_id, chat.message, [envelope])
-    assert accepted.result.reply.startswith('Verified spending for 2026-10: CNY 1843.00.')
+    assert 'You spent CNY 1843.00 in October 2026.' in accepted.result.reply
     assert not accepted.state.pending_tool_requests
 
     print('\n2. TRANSFER: retain amount and resolve ambiguous Alice')
@@ -113,7 +113,7 @@ def test_bounded_plan_waits_for_cancellation_completion_before_transfer(monkeypa
     assert advanced.state.pending_plan.steps[0].status == 'completed'
     mfa = send('result', [outcome(transfer, 'PENDING_MFA', 'transfer_action')])
     assert not mfa.result.proposals and mfa.state.pending_plan is not None
-    assert 'Completion is not confirmed' in mfa.result.reply
+    assert "hasn't been completed yet" in mfa.result.reply
     finished = send('result', [outcome(transfer, 'COMPLETED', 'transfer_action')])
     assert not finished.result.proposals and finished.state.pending_plan is None
     assert 'Plan completed' in finished.result.reply

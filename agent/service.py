@@ -48,9 +48,10 @@ def _subscription_reply(report: SubscriptionReport) -> str:
     import json
     import re
     if not report.candidates:
-        return ("No recurring-charge candidates were reported. This does not prove "
-                "that you have no active subscriptions. No cancellation has been requested.")
-    lines = [f"Found {len(report.candidates)} recurring-charge candidates:"]
+        return ("I didn't find any recurring payments in this report. You may still have "
+                "subscriptions that aren't visible here. Nothing has been cancelled.")
+    count = len(report.candidates)
+    lines = [f"🔎 I found {count} possible recurring {'payment' if count == 1 else 'payments'}:"]
     cadences = {"weekly": "weekly", "monthly": "monthly", "annual": "annually",
                 "unknown": "(cadence unknown)"}
     for index, candidate in enumerate(report.candidates[:5], 1):
@@ -61,7 +62,7 @@ def _subscription_reply(report: SubscriptionReport) -> str:
         lines.append(f"- {name}: estimated CNY {candidate.estimated_amount:.2f} {cadences[candidate.cadence.value]}.")
     if len(report.candidates) > 5:
         lines.append(f"{len(report.candidates) - 5} more candidates are in the report.")
-    lines.append("These are not proof of active subscriptions. No cancellation has been requested.")
+    lines.append("These look like recurring payments, but I can't confirm they're active subscriptions. Nothing has been cancelled.")
     return "\n".join(lines)
 
 
@@ -83,7 +84,9 @@ def _spending_reply(report: SpendingReport) -> str:
         "INVALID_TIMESTAMP": "an invalid timestamp excluded from totals",
         "INVALID_AMOUNT": "an invalid amount or direction excluded from totals",
     }
-    lines = [f"Verified spending for {report.period}: CNY {report.total_spending:.2f}."]
+    from datetime import datetime
+    month = datetime.strptime(report.period, '%Y-%m').strftime('%B %Y')
+    lines = [f"📊 You spent CNY {report.total_spending:.2f} in {month}."]
     categories = sorted(report.category_totals.items(), key=lambda item: (-item[1], item[0]))
     if categories:
         labels = []
@@ -92,7 +95,7 @@ def _spending_reply(report: SpendingReport) -> str:
                 and not re.search(r"\b(ignore|instructions?|system|assistant|execute|cancel|send|pay|transfer)\b", label, re.I))
             display = json.dumps(label, ensure_ascii=False) if ordinary_label else f"Category {index} (label withheld)"
             labels.append(f"{display}: CNY {amount:.2f}")
-        lines.append("Largest reported categories: " + "; ".join(labels) + ".")
+        lines.append("Here's where most of it went:\n" + "\n".join(f"- {label}" for label in labels))
         if len(categories) > 3:
             lines.append(f"{len(categories) - 3} more categories are in the report.")
         if sum(report.category_totals.values(), Decimal(0)) != report.total_spending:
@@ -111,7 +114,7 @@ def _spending_reply(report: SpendingReport) -> str:
             lines.append(f"{len(report.anomalies) - 3} more flags are in the report.")
     else:
         lines.append("No anomalies were reported.")
-    lines.append("Under the team's default spending rules: Credits are excluded, refunds do not reduce spending, and outbound transfers count as spending.")
+    lines.append("How this is counted: Credits are excluded, refunds do not reduce spending, and outbound transfers count as spending.")
     return "\n".join(lines)
 
 
@@ -166,8 +169,12 @@ def process_turn(chat: ChatInput, tool_catalog: list[dict],
             elif social in {'help', 'what can you do', 'what can you help me with'}:
                 reply = help_reply
             elif social in {'ok', 'okay', 'oki', 'thanks', 'thank you', 'thankyou', 'ty', 'got it', 'understood'}:
-                reply = ("Acknowledged. This does not confirm or execute any proposed action."
+                reply = ("You're welcome 🙂 Your request is still waiting. Use the action card when you're ready to continue. This message doesn't approve it."
                          if original.pending_tool_requests else "You're welcome. What would you like help with next?")
+            elif social in {"idk", "i don't know", "i dont know", "not sure", "i'm not sure", "im not sure", "no idea"}:
+                reply = "No worries 🙂 We can take it one step at a time. Would you like to check your balance, see where your money went, or review recurring payments?"
+            elif social in {"i hate you", "this is frustrating", "i'm frustrated", "im frustrated", "you're not helping", "you are not helping", "this is annoying"}:
+                reply = "That sounds frustrating. Let's take it one step at a time. Tell me what you wanted to do, and I'll help you work through it."
             if reply is not None:
                 return ConversationTurn(result=AgentResult(reply=reply), state=original)
         progress = _Progress(original)
@@ -277,12 +284,20 @@ def _process(chat, catalog, results, progress):
             report = SubscriptionReport.model_validate(data)
             return accept(_subscription_reply(report))
         execution = ExecutionResult.model_validate(data)
+        action = "transfer" if tool == "request_transfer" else "subscription cancellation"
         if execution.status.value == "COMPLETED":
-            return accept(f"The backend confirmed completion. Action ID: {execution.action_id}.")
+            return accept(f"✅ Your {action} is complete.")
+        outcomes = {
+            "PENDING_CONFIRMATION": f"Your {action} is ready for review. Please use the action card to confirm it. It hasn't been completed yet.",
+            "PENDING_MFA": f"One more step: verify your identity using the code requested in the app to finish your {action}. It hasn't been completed yet.",
+            "CANCELLED": f"Your {action} request has been cancelled. It won't go ahead.",
+            "REJECTED": f"Your {action} wasn't approved and hasn't been completed. Please review the action details.",
+            "FAILED": f"I couldn't confirm that your {action} completed. Please check its status before trying again.",
+        }
         # Nonterminal execution outcomes must remain pending for a later update.
         if execution.status.value in {"REJECTED", "FAILED", "CANCELLED"}:
-            return accept(f"Backend action status: {execution.status.value}. Completion is not confirmed.")
-        return AgentResult(reply=f"Backend action status: {execution.status.value}. Completion is not confirmed.")
+            return accept(outcomes[execution.status.value])
+        return AgentResult(reply=outcomes[execution.status.value])
 
     # Context is supplied by the backend, never inferred from fixture/global state.
     progress.stage = "clarification_processing"
@@ -386,7 +401,11 @@ def _process(chat, catalog, results, progress):
     if extracted.intent == "cancel" and not is_direct_request(request_text, "cancel"):
         return clarify("Please explicitly request cancellation of a verified subscription.")
     if not tool:
-        return clarify("I'm not sure what you mean. I can help with balances, spending, subscriptions, transfers, or cancellations. Please ask for one step at a time.")
+        if extracted.user_mood == 'uncertain':
+            return clarify("No worries 🙂 We can take it one step at a time. Would you like to check your balance, review spending, or look at recurring payments?")
+        if extracted.user_mood == 'frustrated':
+            return clarify("That sounds frustrating. Let's take it one step at a time. What were you trying to do with your account?")
+        return clarify("I'm not quite sure what you'd like to do, but I'm here to help 🙂 You can ask about your balance, spending or subscriptions, or ask me to prepare a transfer. What would you like to try?")
     if tool not in entries:
         return AgentResult(reply="That tool is unavailable. No action was executed.")
     context = entries[tool].get("context", {})
@@ -484,7 +503,9 @@ def _process(chat, catalog, results, progress):
         args["amount"] = f"{validated.amount:.2f}"
     proposal = ActionProposal(proposal_id=str(uuid4()), tool=tool, arguments=args,
                               rationale="User requested this step; backend validation is required.")
-    reply = ("Request proposed. Backend approval and policy checks are required; nothing has been executed."
+    reply = (("💸 Your transfer is ready to review. Please check the details in the action card and confirm when you're ready; nothing has been executed."
+              if extracted.intent == "transfer" else
+              "Your subscription cancellation is ready to review. Please check the action card and confirm when you're ready; nothing has been executed.")
              if extracted.intent in ("transfer", "cancel") else
              "I have proposed a read-only lookup. A verified tool result is needed before reporting figures.")
     return AgentResult.model_validate(dict(reply=reply, proposals=[proposal]))

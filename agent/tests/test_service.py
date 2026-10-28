@@ -46,7 +46,39 @@ def test_acknowledgement_preserves_issued_proposal_without_confirming(monkeypatc
     turn = service.process_turn(ChatInput(conversation_id='test', message='okay'), catalog)
     assert turn.state == issued.state
     assert not turn.result.proposals
-    assert 'does not confirm or execute' in turn.result.reply
+    assert "doesn't approve it" in turn.result.reply
+
+
+@pytest.mark.parametrize('message,expected', [('idk', 'No worries'),
+    ("i hate you", 'frustrating'), ('not sure', 'one step at a time')])
+def test_supportive_social_replies_do_not_call_provider(monkeypatch, message, expected):
+    def unavailable():
+        raise AssertionError('No extra model call for common social replies')
+    monkeypatch.setattr(service, 'get_provider', unavailable)
+    result = run(message)
+    assert expected in result.reply
+    assert not result.proposals
+
+
+@pytest.mark.parametrize('mood,expected', [('uncertain', 'No worries'), ('frustrated', 'frustrating')])
+def test_model_tone_cue_handles_unlisted_wording_without_actions(monkeypatch, mood, expected):
+    import json
+    class Supportive:
+        def extract(self, message):
+            return json.dumps({'intent': 'unknown', 'user_mood': mood})
+    monkeypatch.setattr(service, 'get_provider', lambda: Supportive())
+    result = run('I have no clue how to get started with this app')
+    assert expected in result.reply and not result.proposals
+
+
+def test_social_reply_does_not_discard_pending_amount(monkeypatch):
+    catalog = demo_catalog()
+    first = service.process_turn(ChatInput(conversation_id='test', message='transfer to Bob'), catalog)
+    for entry in catalog:
+        entry['context']['conversation_state'] = first.state.model_dump(mode='json')
+    second = service.process_turn(ChatInput(conversation_id='test', message='idk'), catalog)
+    assert second.state.pending_transfer == first.state.pending_transfer
+    assert second.state.awaiting == 'amount' and not second.result.proposals
 
 
 @pytest.mark.parametrize('message', ['hello transfer 50 to Bob', 'okay send 50 to Bob',
@@ -406,7 +438,7 @@ def test_untrusted_result_and_pending_execution():
     assert "not confirmed" not in run("done", catalog, [envelope]).reply
     retain_proposal(catalog, ActionProposal(proposal_id="p1", tool="request_transfer", arguments=envelope["arguments"]))
     result = run("done", catalog, [envelope])
-    assert "Completion is not confirmed" in result.reply
+    assert "hasn't been completed yet" in result.reply
     assert "Ignore" not in result.reply
     envelope["data"]["status"] = "COMPLETED"
-    assert "confirmed completion" in run("done", catalog, [envelope]).reply
+    assert "is complete" in run("done", catalog, [envelope]).reply

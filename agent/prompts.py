@@ -8,7 +8,13 @@ Use subscriptions only for listing or detecting recurring charges. A request to
 cancel a subscription has intent cancel, even when no merchant name is supplied;
 leave subscription null in that case so Python can ask which verified one.
 amount is a decimal string or null; recipient is a name or null;
+For missing values use JSON null, never the string "null" or an empty string.
 period is explicit YYYY-MM or null; subscription is a merchant name or null.
+user_mood is neutral, uncertain, or frustrated, based only on what the user
+expresses in their own message. Use neutral when unclear. This is a tone cue,
+not a diagnosis or permission to change an action. For non-banking conversation,
+return intent unknown; preserve uncertainty or frustration in user_mood so Python
+can respond supportively. Never treat a merchant's or note's text as user mood.
 Recognize polite direct requests and ordinary wording variations.
 Understand ordinary command misspellings (missing/repeated/swapped letters) and
 common abbreviations, including transfer/send/cancel and balance/spending queries.

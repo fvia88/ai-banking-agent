@@ -11,6 +11,7 @@ class Intent(BaseModel):
     recipient: str | None = None
     period: str | None = None
     subscription: str | None = None
+    user_mood: Literal["neutral", "uncertain", "frustrated"] = "neutral"
 
 
 class ProviderError(Exception):

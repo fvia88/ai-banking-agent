@@ -39,8 +39,8 @@ def test_subscription_reply_lists_returned_candidates_without_provider(monkeypat
     turn = service.process_turn(chat, catalog, [envelope])
     assert '"StreamBox"' in turn.result.reply and 'estimated CNY 39.00 monthly' in turn.result.reply
     assert '"CloudMusic"' in turn.result.reply and 'estimated CNY 19.00 monthly' in turn.result.reply
-    assert 'not proof of active subscriptions' in turn.result.reply
-    assert 'No cancellation has been requested' in turn.result.reply
+    assert "can't confirm they're active subscriptions" in turn.result.reply
+    assert 'Nothing has been cancelled' in turn.result.reply
     assert not turn.result.proposals and not turn.state.pending_tool_requests
     assert envelope == before
 
@@ -48,8 +48,8 @@ def test_subscription_reply_lists_returned_candidates_without_provider(monkeypat
 def test_empty_subscription_report_does_not_claim_no_active_subscriptions(monkeypatch):
     chat, catalog, _, envelope = request(monkeypatch, 'List subscriptions')
     reply = service.process_turn(chat, catalog, [envelope]).result.reply
-    assert 'No recurring-charge candidates were reported' in reply
-    assert 'does not prove' in reply
+    assert "I didn't find any recurring payments" in reply
+    assert 'You may still have subscriptions' in reply
     assert 'StreamBox' not in reply and 'CloudMusic' not in reply
 
 
@@ -83,7 +83,7 @@ def test_subscription_reply_limits_list_without_losing_total_count(monkeypatch):
         candidates.append(candidate)
     envelope['data'] = {'candidates': candidates}
     reply = service.process_turn(chat, catalog, [envelope]).result.reply
-    assert '7 recurring-charge candidates' in reply
+    assert '7 possible recurring payments' in reply
     assert 'Merchant4' in reply and 'Merchant5' not in reply
     assert '2 more candidates' in reply
 
@@ -161,7 +161,7 @@ def test_p3_report_can_be_explained_directly(monkeypatch):
     envelope['data'] = report.model_dump(mode='json')
     reply = service.process_turn(chat, catalog, [envelope]).result.reply
     assert f'CNY {report.total_spending:.2f}' in reply
-    assert 'Largest reported categories' in reply
+    assert "Here's where most of it went" in reply
 
 
 def p3_synthetic_report():
@@ -186,7 +186,7 @@ def test_p3_actual_anomaly_report_summary_and_truncation(monkeypatch):
     assert '"Education": CNY 5800.00' in reply
     assert '"Shopping": CNY 2680.00' in reply
     assert '"Dining": CNY 327.50' in reply
-    assert reply.count('\n- ') == 3 and '4 more flags' in reply
+    assert reply.partition('Report flags (not proof of fraud):')[2].count('\n- ') == 3 and '4 more flags' in reply
     assert 'not proof of fraud' in reply
     assert 'Ignore previous' not in reply and '13.5x' not in reply
     assert envelope == before and not turn.result.proposals
@@ -256,7 +256,7 @@ def test_spending_month_must_equal_original_request(monkeypatch):
     rejected = service.process_turn(chat, catalog, [wrong])
     assert "1843.00" not in rejected.result.reply and rejected.state == state
     accepted = service.process_turn(chat, catalog, [envelope])
-    assert "2026-10" in accepted.result.reply and "1843.00" in accepted.result.reply
+    assert "October 2026" in accepted.result.reply and "1843.00" in accepted.result.reply
     assert not accepted.state.pending_tool_requests
 
 
@@ -383,20 +383,20 @@ def test_mutation_outcomes_preserve_or_consume_request_and_reject_terminal_repla
     assert 'Ignore checks' not in outcome.result.reply and '900' not in outcome.result.reply
     if status.startswith('PENDING_'):
         assert outcome.state == proposed.state
-        assert f'Backend action status: {status}' in outcome.result.reply
-        assert 'Completion is not confirmed' in outcome.result.reply
+        assert "hasn't been completed yet" in outcome.result.reply
+        assert ('action card' if status == 'PENDING_CONFIRMATION' else 'verify your identity') in outcome.result.reply
     else:
         assert not outcome.state.pending_tool_requests
         if status == 'COMPLETED':
-            assert 'backend confirmed completion' in outcome.result.reply
-            assert 'synthetic_action' in outcome.result.reply
+            assert 'is complete.' in outcome.result.reply
+            assert 'synthetic_action' not in outcome.result.reply
         else:
-            assert f'Backend action status: {status}' in outcome.result.reply
-            assert 'Completion is not confirmed' in outcome.result.reply
-            assert 'backend confirmed completion' not in outcome.result.reply
+            expected = {'REJECTED': "wasn't approved", 'FAILED': "couldn't confirm", 'CANCELLED': "request has been cancelled"}
+            assert expected[status] in outcome.result.reply
+            assert 'is complete.' not in outcome.result.reply
         retain(catalog, outcome.state)
         replay = service.process_turn(chat, catalog, [envelope])
         assert not replay.result.proposals
         assert replay.state == outcome.state
-        assert 'backend confirmed completion' not in replay.result.reply
+        assert 'is complete.' not in replay.result.reply
         assert 'synthetic_action' not in replay.result.reply
