@@ -34,6 +34,8 @@ services:
       AGENT_PROVIDER: "${AGENT_PROVIDER:-mock}"
       GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
       GEMINI_MODEL: "${GEMINI_MODEL:-gemini-3.1-flash-lite}"
+      GROQ_API_KEY: "${GROQ_API_KEY:-}"
+      GROQ_MODEL: "${GROQ_MODEL:-openai/gpt-oss-20b}"
       AGENT_TIMEOUT_SECONDS: "${AGENT_TIMEOUT_SECONDS:-20}"
     ports:
       - "8000:8000"

@@ -34,4 +34,7 @@ def get_provider() -> Provider:
     if name == "gemini":
         from .gemini_provider import GeminiProvider
         return GeminiProvider()
+    if name == "groq":
+        from .groq_provider import GroqProvider
+        return GroqProvider()
     raise ProviderError("Unsupported provider")

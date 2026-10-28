@@ -43,6 +43,31 @@ Missing key, SDK/network errors, invalid JSON, and invalid arguments return a
 safe generic response without SDK error payloads or credentials. Retry manually
 after outages; use mock mode while offline. No automatic paid-provider fallback.
 
+## Optional Groq CLI trial
+
+Groq is an additional provider; Gemini remains available. This trial does not
+change Docker or the website's provider configuration. Install the updated
+`agent/requirements.txt` into your virtual environment first.
+
+With `GROQ_API_KEY` already configured in the same PowerShell terminal:
+
+```powershell
+$env:GROQ_MODEL = 'openai/gpt-oss-20b'
+agent/.venv/Scripts/python.exe -m agent.diagnose --provider groq --message 'Could you send 50?' --expected-intent transfer --repeat 3
+agent/.venv/Scripts/python.exe -m agent.cli --interactive --provider groq
+```
+
+Try `Could you send 50?`, followed by `Bob`: expect recipient clarification,
+then a transfer proposal. No banking action executes in this CLI. Read results
+use synthetic demo data, independently of the website database.
+
+Use `diagnose` to compare provider request times: some CLI messages are handled
+locally and therefore do not measure model latency. Offline transport tests
+verify the adapter and safeguards, but live intent accuracy and connection
+reliability still require a real-key trial. Groq has its own free-tier quotas.
+There are no automatic retries or fallback to another provider. Use
+`--provider gemini` to select Gemini again.
+
 ## Limits
 
 Mock phrases include balance, spending YYYY-MM, list subscriptions, transfer
