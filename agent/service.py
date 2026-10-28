@@ -43,6 +43,29 @@ def clarify(reply):
     return AgentResult(reply=reply, needs_clarification=True)
 
 
+def _draft_answer(text):
+    """Unwrap explicit correction phrases, never infer new banking details."""
+    import re
+    value = text.strip().rstrip('.!?').strip()
+    corrected = False
+    for _ in range(2):
+        prefix = re.match(r'^(?:(?:actually|sorry)(?:,\s*|\s+)|no,\s*|(?:i meant|make that|make it|use|change it to)\s+)', value, re.I)
+        if not prefix:
+            break
+        value = value[prefix.end():].strip()
+        corrected = True
+    field = re.match(r'^(?:change|set) (?:the |my )?(amount|recipient|month|year|subscription) to\s+', value, re.I)
+    target = field[1].casefold() if field else None
+    if field:
+        value = value[field.end():].strip()
+        corrected = True
+    if re.search(r'\s+instead$', value, re.I):
+        corrected = True
+    if corrected:
+        value = re.sub(r'\s+instead$', '', value, flags=re.I).strip()
+    return value, target, corrected
+
+
 def _spending_date(text, *, answer=False):
     """Read only dates actually stated by the user; never accept a model's year."""
     import re
@@ -214,6 +237,8 @@ def process_turn(chat: ChatInput, tool_catalog: list[dict],
                 reply = "That sounds frustrating. Let's take it one step at a time. Tell me what you wanted to do, and I'll help you work through it."
             if reply is not None:
                 return ConversationTurn(result=AgentResult(reply=reply), state=original)
+            if original.pending_tool_requests and _draft_answer(chat.message)[2]:
+                return ConversationTurn(result=AgentResult(reply="That request already has an action card. I can't change it here. Cancel its approval in the app, then send a new request with the correct details."), state=original)
         progress = _Progress(original)
         progress.stage = "request_processing"
         result = _process(chat, tool_catalog, tool_results or [], progress)
@@ -356,37 +381,61 @@ def _process(chat, catalog, results, progress):
     continuing_cancellation = cancellation is not None
     continuing_spending = spending is not None
     continuing = pending is not None and progress.state.awaiting is not None
+    answer, corrected_field, correction = _draft_answer(chat.message)
     if continuing_cancellation:
         if previous:
             raise ValueError("Do not mix structured state with legacy replay")
-        extracted = Intent(intent="cancel", subscription=chat.message.strip())
+        if corrected_field not in {None, 'subscription'}:
+            return clarify("Which subscription would you like to cancel? Please enter its full name.")
+        extracted = Intent(intent="cancel", subscription=answer if correction else chat.message.strip())
+        message = extracted.subscription
     elif continuing_spending:
         if previous:
             raise ValueError("Do not mix structured state with legacy replay")
+        if corrected_field not in {None, 'month', 'year'}:
+            return clarify("Please tell me the month or year you'd like to check.")
+        message = answer if correction else chat.message
         extracted = Intent(intent="spending")
     elif continuing:
         if previous:
             raise ValueError("Do not mix structured state with legacy replay")
         if not is_direct_request(pending.original_message, "transfer"):
             raise ValueError("Pending request is not an explicit transfer")
-        if progress.state.awaiting == "amount":
-            import re
-            if not re.fullmatch(r"[+-]?\d+(?:\.\d+)?", chat.message.strip()):
+        import re
+        target = progress.state.awaiting
+        if correction:
+            if corrected_field not in {None, 'amount', 'recipient'}:
+                return clarify("Would you like to change the transfer amount or recipient?")
+            target = corrected_field or ('amount' if re.match(r'^[+-]?\d', answer) else 'recipient')
+        else:
+            answer = chat.message.strip()
+        if target == "amount":
+            amount_match = re.fullmatch(r"([+-]?\d+(?:\.\d+)?)(?:\s+(?:CNY|yuan))?", answer, re.I)
+            if not amount_match:
+                if correction:
+                    draft = pending.model_copy(update={'amount': None})
+                    return _transfer_question(progress, draft, 'amount', "Please answer with a positive CNY amount using digits.")
                 return clarify("Please answer with a positive CNY amount using digits.")
             try:
-                accepted_amount = TypeAdapter(PositiveMoney).validate_python(chat.message.strip())
+                accepted_amount = TypeAdapter(PositiveMoney).validate_python(amount_match[1])
             except ValidationError:
+                if correction:
+                    draft = pending.model_copy(update={'amount': None})
+                    return _transfer_question(progress, draft, 'amount', "Please enter a CNY amount greater than zero with at most two decimal places.")
                 return clarify("Please enter a CNY amount greater than zero with at most two decimal places.")
             pending = PendingTransfer.model_validate({**pending.model_dump(), "amount": accepted_amount})
         else:
             transfer_context = entries.get("request_transfer", {}).get("context", {})
             choices = [Recipient.model_validate(r) for r in transfer_context.get("recipients", [])]
-            name = chat.message.strip().casefold()
+            name = answer.casefold()
             matches = [r for r in choices if name in (r.display_name.casefold(), r.display_name.split()[0].casefold())]
             if len(matches) != 1:
-                return clarify(_recipient_question(chat.message.strip(), matches))
+                if correction:
+                    draft = pending.model_copy(update={'recipient_text': answer, 'recipient_id': None})
+                    return _transfer_question(progress, draft, 'recipient', _recipient_question(answer, matches))
+                return clarify(_recipient_question(answer, matches))
             pending = PendingTransfer.model_validate({**pending.model_dump(),
-                "recipient_text": chat.message.strip(), "recipient_id": matches[0].recipient_id})
+                "recipient_text": answer, "recipient_id": matches[0].recipient_id})
         # Exact field answers are handled deterministically; no LLM is needed to
         # reinterpret the entire request or guess which details should be retained.
         amount_text = f"{pending.amount:.2f}" if pending.amount is not None else None
@@ -451,8 +500,23 @@ def _process(chat, catalog, results, progress):
         return AgentResult(reply="This account is locked. No state-changing proposal was created.")
     if extracted.intent == "spending":
         year, month, invalid = _spending_date(message, answer=continuing_spending)
+        if continuing_spending and corrected_field == 'year' and (year is None or month is not None):
+            invalid = True
+        if continuing_spending and corrected_field == 'month' and (month is None or year is not None):
+            invalid = True
         if invalid:
-            if not continuing_spending:
+            if continuing_spending and correction:
+                changes = {}
+                if corrected_field == 'month' or month is not None:
+                    changes['month'] = None
+                if corrected_field == 'year' or year is not None:
+                    changes['year'] = None
+                if not changes:
+                    changes = {'year': None, 'month': None}
+                progress.state = ConversationState(conversation_id=chat.conversation_id,
+                    pending_spending=spending.model_copy(update=changes), awaiting='period',
+                    pending_tool_requests=progress.state.pending_tool_requests)
+            elif not continuing_spending:
                 progress.state = ConversationState(conversation_id=chat.conversation_id,
                     pending_spending=PendingSpending(original_message=chat.message, account_id=args['account_id']),
                     awaiting="period", pending_tool_requests=progress.state.pending_tool_requests)
