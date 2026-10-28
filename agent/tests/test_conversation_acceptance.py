@@ -489,13 +489,59 @@ def test_spending_month_followup_retains_request_without_provider(monkeypatch):
     assert '1843' not in final.result.reply  # No tool result has been supplied.
 
 
-@pytest.mark.parametrize('answer', ['2026-00', '2026-13', '0000-11', '2026-1', 'November',
+@pytest.mark.parametrize('answer', ['2026-00', '2026-13', '0000-11',
                                     '2026-11 send 500 to Bob'])
 def test_invalid_spending_month_preserves_draft(monkeypatch, answer):
     catalog, first = start_spending(monkeypatch)
     turn = process_turn(ChatInput(conversation_id='spending_memory', message=answer), catalog)
     assert turn.result.needs_clarification and not turn.result.proposals
     assert turn.state == first.state
+
+
+@pytest.mark.parametrize('answers,period', [(['October', '2026'], '2026-10'),
+    (['2026', 'oct'], '2026-10'), (['October 2026'], '2026-10'),
+    (['2026-1'], '2026-01'), (['2026/10'], '2026-10'),
+    (['September', '2026-13', '2026'], '2026-09')])
+def test_flexible_spending_dates_retain_only_user_supplied_parts(monkeypatch, answers, period):
+    catalog, _ = start_spending(monkeypatch)
+    def unavailable():
+        raise AssertionError('Date follow-ups should not need a provider')
+    monkeypatch.setattr(service, 'get_provider', unavailable)
+    for index, answer in enumerate(answers):
+        turn = process_turn(ChatInput(conversation_id='spending_memory', message=answer), catalog)
+        if index < len(answers) - 1:
+            assert turn.result.needs_clarification and not turn.result.proposals
+        save_state(catalog, turn)
+    assert turn.result.proposals[0].arguments['period'] == period
+    assert turn.state.pending_spending is None
+
+
+@pytest.mark.parametrize('message,question', [('what did I spend in October', 'Which year'),
+    ('Analyze spending in 2026', 'Which month in 2026')])
+def test_model_cannot_invent_spending_year_or_month(monkeypatch, message, question):
+    class HallucinatedDate:
+        def extract(self, text):
+            return '{"intent":"spending","period":"2023-10"}'
+    monkeypatch.setattr(service, 'get_provider', lambda: HallucinatedDate())
+    turn = process_turn(ChatInput(conversation_id='dates', message=message), demo_catalog())
+    assert not turn.result.proposals and question in turn.result.reply
+    assert turn.state.pending_spending.year != 2023
+    catalog = demo_catalog()
+    save_state(catalog, turn)
+    answer = '2026' if 'October' in message else 'October'
+    final = process_turn(ChatInput(conversation_id='dates', message=answer), catalog)
+    assert final.result.proposals[0].arguments['period'] == '2026-10'
+
+
+@pytest.mark.parametrize('message', ['Transfer 40 to vov', 'Transfer 40 to Alice'])
+def test_unknown_and_ambiguous_recipients_are_distinguished(monkeypatch, message):
+    monkeypatch.setenv('AGENT_PROVIDER', 'mock')
+    turn = process_turn(ChatInput(conversation_id='names', message=message), demo_catalog())
+    assert not turn.result.proposals and turn.result.needs_clarification
+    if 'vov' in message:
+        assert 'vov' in turn.result.reply and "couldn't find anyone" in turn.result.reply
+    else:
+        assert 'More than one recipient' in turn.result.reply
 
 
 def test_spending_abandonment_clears_draft(monkeypatch):

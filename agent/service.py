@@ -43,6 +43,43 @@ def clarify(reply):
     return AgentResult(reply=reply, needs_clarification=True)
 
 
+def _spending_date(text, *, answer=False):
+    """Read only dates actually stated by the user; never accept a model's year."""
+    import re
+    names = ('january', 'february', 'march', 'april', 'may', 'june',
+             'july', 'august', 'september', 'october', 'november', 'december')
+    normalized = text.casefold().strip().rstrip('.!?')
+    dates = re.findall(r'(?<!\d)(\d{4})[-/](\d{1,2})(?!\d)', normalized)
+    years = {int(y) for y in re.findall(r'(?<!\d)\d{4}(?!\d)', normalized)}
+    months = {int(m) for _, m in dates}
+    for number, name in enumerate(names, 1):
+        if re.search(r'\b(?:' + name + '|' + name[:3] + (r'|sept' if number == 9 else '') + r')\b', normalized):
+            months.add(number)
+    if re.fullmatch(r'\d{1,2}', normalized):
+        months.add(int(normalized))
+    invalid = (len(years) > 1 or len(months) > 1 or any(not 1 <= m <= 12 for m in months)
+               or any(not 1 <= y <= 9999 for y in years))
+    if answer:
+        rest = re.sub(r'\d{4}[-/]\d{1,2}|\b\d{4}\b|\b\d{1,2}\b', ' ', normalized)
+        for name in (*names, *(name[:3] for name in names), 'sept'):
+            rest = re.sub(r'\b' + name + r'\b', ' ', rest)
+        rest = re.sub(r'\b(in|for|of|the|year|month|please)\b|[,./-]', ' ', rest)
+        invalid = invalid or bool(rest.strip())
+    return (next(iter(years), None), next(iter(months), None), invalid)
+
+
+def _recipient_question(name, matches):
+    if matches:
+        return "More than one recipient matches that name. Please enter their full name from your verified recipient list."
+    import json
+    import re
+    # Echo ordinary names only, never arbitrary instructions or markup.
+    if len(name) <= 64 and re.fullmatch(r"[\w .'-]+", name) and not re.search(
+            r'\b(ignore|instructions?|system|assistant|execute|cancel|send|pay|transfer)\b', name, re.I):
+        return f"I couldn't find anyone named {json.dumps(name, ensure_ascii=False)} in your verified recipient list. Please check the name or choose another recipient."
+    return "I couldn't find a matching recipient in your verified list. Please check the name or choose another recipient."
+
+
 def _subscription_reply(report: SubscriptionReport) -> str:
     """Display report candidates as data, never as verified subscription state."""
     import json
@@ -326,16 +363,7 @@ def _process(chat, catalog, results, progress):
     elif continuing_spending:
         if previous:
             raise ValueError("Do not mix structured state with legacy replay")
-        import re
-        from datetime import date
-        period = chat.message.strip()
-        try:
-            if not re.fullmatch(r"[0-9]{4}-(0[1-9]|1[0-2])", period):
-                raise ValueError("Invalid month format")
-            date(int(period[:4]), int(period[5:]), 1)
-        except ValueError:
-            return clarify("Please enter a valid month using YYYY-MM, for example 2026-11.")
-        extracted = Intent(intent="spending", period=period)
+        extracted = Intent(intent="spending")
     elif continuing:
         if previous:
             raise ValueError("Do not mix structured state with legacy replay")
@@ -356,7 +384,7 @@ def _process(chat, catalog, results, progress):
             name = chat.message.strip().casefold()
             matches = [r for r in choices if name in (r.display_name.casefold(), r.display_name.split()[0].casefold())]
             if len(matches) != 1:
-                return clarify("Please specify the recipient's full name using the app's verified recipient list.")
+                return clarify(_recipient_question(chat.message.strip(), matches))
             pending = PendingTransfer.model_validate({**pending.model_dump(),
                 "recipient_text": chat.message.strip(), "recipient_id": matches[0].recipient_id})
         # Exact field answers are handled deterministically; no LLM is needed to
@@ -422,12 +450,27 @@ def _process(chat, catalog, results, progress):
     if extracted.intent in ("transfer", "cancel") and context.get("account_locked", False):
         return AgentResult(reply="This account is locked. No state-changing proposal was created.")
     if extracted.intent == "spending":
-        if not extracted.period:
+        year, month, invalid = _spending_date(message, answer=continuing_spending)
+        if invalid:
+            if not continuing_spending:
+                progress.state = ConversationState(conversation_id=chat.conversation_id,
+                    pending_spending=PendingSpending(original_message=chat.message, account_id=args['account_id']),
+                    awaiting="period", pending_tool_requests=progress.state.pending_tool_requests)
+            return clarify("Please enter a valid month using YYYY-MM, for example 2026-11.")
+        if continuing_spending:
+            year = year if year is not None else spending.year
+            month = month if month is not None else spending.month
+        if year is None or month is None:
             progress.state = ConversationState(conversation_id=chat.conversation_id,
-                pending_spending=PendingSpending(original_message=chat.message, account_id=args['account_id']),
+                pending_spending=PendingSpending(original_message=spending.original_message if continuing_spending else chat.message,
+                    account_id=args['account_id'], year=year, month=month),
                 awaiting="period", pending_tool_requests=progress.state.pending_tool_requests)
+            if month is not None:
+                return clarify("Which year would you like me to check for that month?")
+            if year is not None:
+                return clarify(f"Which month in {year} would you like me to check?")
             return clarify("Which month? Please use YYYY-MM.")
-        args["period"] = extracted.period
+        args["period"] = f'{year:04d}-{month:02d}'
     if extracted.intent == "transfer":
         recipient_text = extracted.recipient
         if recipient_text and recipient_text.casefold() not in message.casefold():
@@ -459,7 +502,7 @@ def _process(chat, catalog, results, progress):
         matches = [r for r in recipients if name == r.display_name.casefold() or
                    name == r.display_name.split()[0].casefold()]
         if len(matches) != 1:
-            return _transfer_question(progress, draft, "recipient", "Please specify the recipient's full name using the app's verified recipient list.")
+            return _transfer_question(progress, draft, "recipient", _recipient_question(recipient_text, matches))
         if name not in message.casefold():
             raise ValueError("Ungrounded recipient")
         args.update(recipient_id=matches[0].recipient_id, amount=extracted.amount, currency="CNY")

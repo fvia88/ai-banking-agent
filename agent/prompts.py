@@ -10,6 +10,8 @@ leave subscription null in that case so Python can ask which verified one.
 amount is a decimal string or null; recipient is a name or null;
 For missing values use JSON null, never the string "null" or an empty string.
 period is explicit YYYY-MM or null; subscription is a merchant name or null.
+Named months and year-only requests still have spending intent. Never invent
+a missing year or month; Python retains stated date parts and asks for the rest.
 user_mood is neutral, uncertain, or frustrated, based only on what the user
 expresses in their own message. Use neutral when unclear. This is a tone cue,
 not a diagnosis or permission to change an action. For non-banking conversation,

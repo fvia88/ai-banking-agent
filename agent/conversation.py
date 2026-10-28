@@ -35,6 +35,8 @@ class PendingSpending(BaseModel):
 
     original_message: str = Field(min_length=1, max_length=4000)
     account_id: ID
+    year: int | None = Field(default=None, ge=1, le=9999)
+    month: int | None = Field(default=None, ge=1, le=12)
 
 
 class PendingCancellation(BaseModel):
