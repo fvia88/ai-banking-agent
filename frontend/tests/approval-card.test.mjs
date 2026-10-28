@@ -173,3 +173,64 @@ test('pending controls and notification retry are disabled during an action requ
   assert.match(html, /Verify/);
   assert.equal((html.match(/<button disabled=""/g) || []).length, 3);
 });
+
+test('history retrieval is read-only and uses the selected conversation and page cursor', async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, options) => {
+    requests.push({ url, options });
+    return { ok: true, json: async () => ({ messages: [], has_more: false }) };
+  };
+  try {
+    await api.fetchConversation('conv/owned', 42);
+    await api.fetchConversations(50);
+    assert.equal(requests[0].url, '/api/v1/conversations/conv%2Fowned?before_id=42');
+    assert.equal(requests[1].url, '/api/v1/conversations?offset=50');
+    for (const request of requests) {
+      assert.equal(request.options.method, undefined);
+      assert.equal(request.options.body, undefined);
+      assert.equal(request.options.headers['X-Demo-User-Id'], 'usr_demo_01');
+      assert.doesNotMatch(request.url, /confirm|verify|continue/);
+    }
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('new chats are created on the server without a previous conversation state', async () => {
+  const originalFetch = globalThis.fetch;
+  let request;
+  globalThis.fetch = async (url, options) => {
+    request = { url, options };
+    return { ok: true, json: async () => ({ conversation_id: 'conv_new' }) };
+  };
+  try {
+    assert.equal((await api.createConversation()).conversation_id, 'conv_new');
+    assert.equal(request.url, '/api/v1/conversations');
+    assert.equal(request.options.method, 'POST');
+    assert.equal(request.options.body, undefined);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('missing history can fall back to a new selection but server errors stay errors', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => ({ ok: false, status: 404 });
+    assert.equal(await api.fetchConversation('missing'), null);
+    globalThis.fetch = async () => ({ ok: false, status: 500 });
+    await assert.rejects(api.fetchConversation('owned'), /Could not load this chat/);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test('chat sends the selected conversation rather than the legacy shared ID', async () => {
+  const originalFetch = globalThis.fetch;
+  let request;
+  globalThis.fetch = async (url, options) => {
+    request = { url, options };
+    return { ok: true, json: async () => ({ conversation_id: 'conv_selected', actions: [] }) };
+  };
+  try {
+    await api.sendChatMessage('What is my balance?', 'conv_selected');
+    assert.deepEqual(JSON.parse(request.options.body), {
+      conversation_id: 'conv_selected', message: 'What is my balance?',
+    });
+  } finally { globalThis.fetch = originalFetch; }
+});

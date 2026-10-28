@@ -4,7 +4,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contracts.models import ErrorResponse
 from app.config import settings
-from app.api import health, accounts, transactions, chat, approvals, audit, subscriptions, demo_inbox, continuation
+from app.api import health, accounts, transactions, chat, approvals, audit, subscriptions, demo_inbox, continuation, conversations
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -44,3 +44,4 @@ app.include_router(audit.router, prefix=settings.API_V1_PREFIX, tags=["Audit"])
 app.include_router(subscriptions.router, prefix=settings.API_V1_PREFIX, tags=["Subscriptions"])
 app.include_router(demo_inbox.router, prefix=settings.API_V1_PREFIX, tags=["Demo Inbox"])
 app.include_router(continuation.router, prefix=settings.API_V1_PREFIX, tags=["Chat"])
+app.include_router(conversations.router, prefix=settings.API_V1_PREFIX, tags=["Chat"])

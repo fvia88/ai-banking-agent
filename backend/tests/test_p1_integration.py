@@ -116,7 +116,7 @@ def test_real_spending_followup_uses_stored_month_draft(client, monkeypatch):
     invalid = post_chat(client, 'p1_spending_http', '2026-13')
     assert invalid['actions'] == [] and saved_p1_state('p1_spending_http') == before
     final = post_chat(client, 'p1_spending_http', '2026-10')
-    assert 'Verified spending for 2026-10: CNY 35.00.' in final['reply']
+    assert 'You spent CNY 35.00 in October 2026.' in final['reply']
     assert calls[0][1] == '2026-10'
     assert all(t.account_id == 'acc_cny_001' for t in calls[0][0])
     assert saved_p1_state('p1_spending_http')['pending_spending'] is None
@@ -140,7 +140,8 @@ def test_real_transfer_invalid_answer_retains_bob_and_canonical_proposal(client)
     assert 'action_id' in final['actions'][0]['approval']
     post_chat(client, 'p1_transfer_memory', 'Transfer to Bob')
     discarded = post_chat(client, 'p1_transfer_memory', 'Never mind!')
-    assert discarded['reply'] == 'Unfinished request discarded.'
+    assert discarded['reply'].startswith("Noted, I've discarded your unfinished request.")
+    assert 'approval cards are unchanged' in discarded['reply']
     state = saved_p1_state('p1_transfer_memory')
     assert state['pending_transfer'] is None and state['pending_tool_requests'] == pending
 

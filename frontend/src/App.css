@@ -7,6 +7,17 @@
 .brand-chinese { display: block; font-size: 11px; letter-spacing: 5px; color: #9ba8c2; padding-left: 2px; margin-top: 1px; }
 .workspace-label { color: #717b8e; font-size: 10px; font-weight: 650; letter-spacing: 1.5px; padding: 0 14px; margin-bottom: 12px; }
 .navigation { display: flex; flex-direction: column; gap: 5px; }
+.sidebar { overflow-y: auto; }
+.new-chat-button { margin: 16px 4px 0; padding: 11px; border: 1px solid #355482; border-radius: 9px; background: #17243e; color: #bed4fb; text-align: left; }
+.chat-history { flex: 1; min-height: 110px; overflow-y: auto; margin-top: 20px; }
+.chat-history .workspace-label { margin-bottom: 8px; }
+.history-item { display: flex; align-items: center; gap: 9px; width: 100%; padding: 10px 12px; border: 0; border-radius: 7px; background: transparent; color: #929fb5; text-align: left; font-size: 11px; }
+.history-item > svg { width: 14px; flex-shrink: 0; }
+.history-item > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-item:hover, .history-item.is-active { background: #1a2941; color: #cee0ff; }
+.history-item:disabled, .new-chat-button:disabled { opacity: .55; cursor: default; }
+.history-more { display: block; margin: 12px auto 18px; font-size: 11px; color: #a4bce4; }
+.history-loading { text-align: center; color: #96a8c3; font-size: 12px; margin-bottom: 18px; }
 .nav-item { display: flex; align-items: center; gap: 12px; width: 100%; padding: 13px 14px; color: #929bad; background: transparent; border: 1px solid transparent; border-radius: 9px; text-align: left; font-weight: 500; }
 .nav-item:hover { background: #171b24; color: #e7edfc; }
 .nav-item.is-active { color: #b6ceff; background: #17243e; border-color: #253a5f; }

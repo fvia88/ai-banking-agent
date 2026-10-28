@@ -24,6 +24,7 @@ from contracts.tool_schemas import validate_tool_arguments
 from app.services.adapters import policy_service
 from app.services.subscriptions import selected_account, stored_records, subscription_report
 from app.services.daily_transfers import effective_total
+from app.services.chat_history import save_turn
 
 router = APIRouter()
 
@@ -38,7 +39,10 @@ def handle_chat(
   # Keep the lock until all processing/result handling and state saves finish.
   with conversation_session(state_key):
     if agent_service.use_mock:
-      return _handle_chat_turn(chat_input, user, db, state_key)
+      response = _handle_chat_turn(chat_input, user, db, state_key)
+      save_turn(db, user.user_id, chat_input, response)
+      db.commit()
+      return response
     from app.services.session_store import lock_conversation
     from app.api.continuation import continue_action
     # Recover a committed result even when the browser missed its callback.
@@ -54,13 +58,19 @@ def handle_chat(
         update = continue_action(action.action_id, user=user, db=db)
         recovered.append(update.chat.reply)
         if update.chat.actions:
-          return update.chat.model_copy(update={"reply": update.chat.reply +
+          response = update.chat.model_copy(update={"reply": update.chat.reply +
               " Your latest message has not been processed; review this next approval, then resend your message."})
+          # The continuation already saved the approval card. Record this new
+          # unprocessed message and notice without duplicating that card.
+          save_turn(db, user.user_id, chat_input, response.model_copy(update={'actions': []}))
+          db.commit()
+          return response
     row = lock_conversation(db, user.user_id, chat_input.conversation_id)
     set_conversation_state(state_key, json.loads(row.state_json))
     try:
       response = _handle_chat_turn(chat_input, user, db, state_key)
       row.state_json = json.dumps(get_conversation_state(state_key))
+      save_turn(db, user.user_id, chat_input, response)
       db.commit()
       if recovered:
         response = response.model_copy(update={"reply": " ".join(recovered) + " " + response.reply})

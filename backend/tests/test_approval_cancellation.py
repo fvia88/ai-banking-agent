@@ -210,7 +210,7 @@ def test_missed_cancellation_notification_recovers_on_next_chat(client, db_sessi
     assert post(client, action).status_code == 200
     response = client.post("/api/v1/chat", json={"conversation_id": "cancel_approval", "message": "What is my balance?"})
     assert response.status_code == 200
-    assert "CANCELLED" in response.json()["reply"] and "15250.00" in response.json()["reply"]
+    assert "request has been cancelled" in response.json()["reply"] and "15250.00" in response.json()["reply"]
     assert not response.json()["actions"]
     assert db_session.query(ActionApprovalModel).count() == 1
 

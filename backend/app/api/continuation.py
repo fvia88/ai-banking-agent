@@ -10,6 +10,7 @@ from app.api.deps import get_current_user
 from app.db.models import ActionApprovalModel, AuditLogModel, UserModel
 from app.db.session import get_db
 from app.services.actions import compute_action_digest
+from app.services.chat_history import save_message
 from app.services.adapters import agent_service
 from app.services.agent_context import trusted_agent_context
 from app.services.proposals import present_proposals, restore_cached_chat
@@ -135,6 +136,8 @@ def continue_action(action_id: str, user: UserModel = Depends(get_current_user),
                       "continuation_json": response.model_dump_json()}, synchronize_session=False)
             if changed != 1:
                 raise HTTPException(409, "Action status changed; retry conversation update")
+            save_message(db, user.user_id, conversation_id, 'agent', response.chat.reply,
+                         response=response.chat, event_key=f'{action_id}:{status}')
             db.commit()
             set_conversation_state(key, next_state)
             return response

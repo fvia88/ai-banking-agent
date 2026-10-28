@@ -1,5 +1,6 @@
 """P2-owned HTTP presentation models; P1's canonical DTOs remain unchanged."""
 from typing import Annotated, Literal
+from datetime import datetime
 
 from pydantic import Field, StringConstraints, model_validator
 
@@ -32,3 +33,30 @@ class AppChatOutput(ChatOutput):
 class CancelApprovalRequest(StrictModel):
     action_digest: str
     idempotency_key: ID
+
+
+class ConversationSummary(StrictModel):
+    conversation_id: ID
+    title: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ConversationList(StrictModel):
+    conversations: list[ConversationSummary]
+    has_more: bool
+
+
+class SavedChatMessage(StrictModel):
+    id: int
+    sender: Literal['user', 'agent']
+    text: str
+    created_at: datetime
+    event_key: str | None = None
+    actions: list[PresentedAction] = Field(default_factory=list)
+
+
+class ConversationDetail(StrictModel):
+    conversation: ConversationSummary
+    messages: list[SavedChatMessage]
+    has_more: bool
