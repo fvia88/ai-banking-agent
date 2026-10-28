@@ -132,7 +132,7 @@ def test_abandonment_after_proposal_does_not_claim_action_cancellation(monkeypat
     proposal = proposed.result.proposals[0].model_dump(mode="json")
     supply(catalog, proposed.state)
     result = service.process_turn(ChatInput(conversation_id="c1", message="never mind"), catalog)
-    assert result.result.reply == "There is no unfinished request to discard."
+    assert result.result.reply == "No worries 🙂 What would you like to do next?"
     assert not result.result.proposals
     assert proposed.result.proposals[0].model_dump(mode="json") == proposal
 

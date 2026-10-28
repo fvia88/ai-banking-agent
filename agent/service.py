@@ -152,7 +152,7 @@ def process_turn(chat: ChatInput, tool_catalog: list[dict],
         if not tool_results and is_abandonment(chat.message):
             reply = ("Unfinished request discarded." if any(draft is not None for draft in
                      (original.pending_transfer, original.pending_spending, original.pending_cancellation))
-                     else "There is no unfinished request to discard.")
+                     else "No worries 🙂 What would you like to do next?")
             return ConversationTurn(result=AgentResult(reply=reply),
                                     state=ConversationState(conversation_id=chat.conversation_id,
                                         pending_tool_requests=original.pending_tool_requests))
