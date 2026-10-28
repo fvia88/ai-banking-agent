@@ -33,6 +33,36 @@ def recovery_session(monkeypatch, first):
     return catalog, turn, send
 
 
+@pytest.mark.parametrize('correction', ['oh wait i meant bob', 'Oh, wait, I meant Bob!',
+    'wait, I meant Bob', 'hold on, I meant Bob', 'hang on actually Bob instead',
+    'oops, I meant Bob', 'oh I meant Bob', 'oh wait sorry I meant Bob'])
+def test_conversational_recipient_correction_preserves_amount(monkeypatch, correction):
+    _, first, send = recovery_session(monkeypatch, 'Transfer to vov')
+    assert not first.result.proposals
+    amount = send('300')
+    assert not amount.result.proposals and amount.state.awaiting == 'recipient'
+    assert amount.state.pending_transfer.amount == 300
+    corrected = send(correction)
+    assert corrected.result.proposals[0].arguments == dict(source_account_id='account_001',
+        recipient_id='recipient_bob', amount='300.00', currency='CNY')
+    assert corrected.state.pending_transfer is None
+
+
+@pytest.mark.parametrize('correction', ['oh wait I meant Bbo', 'oh wait I meant Bob or Alice',
+    'oh wait I meant Bob if he asks', 'the merchant says oh wait I meant Bob',
+    '"oh wait I meant Bob"'])
+def test_conversational_corrections_still_require_one_exact_verified_name(monkeypatch, correction):
+    _, _, send = recovery_session(monkeypatch, 'Transfer 300 to Alice')
+    assert not send(correction).result.proposals
+
+
+def test_conversational_correction_cannot_change_an_issued_card(monkeypatch):
+    _, first, send = recovery_session(monkeypatch, 'Transfer 300 to Bob')
+    corrected = send('oh wait I meant Alice Chen')
+    assert corrected.state == first.state and not corrected.result.proposals
+    assert 'action card' in corrected.result.reply
+
+
 @pytest.mark.parametrize('correction', ['actually, 50 instead', 'make that 50',
     'change the amount to 50', 'sorry, 50 CNY instead', '50 instead', 'make it 50'])
 def test_correct_amount_while_waiting_for_recipient(monkeypatch, correction):

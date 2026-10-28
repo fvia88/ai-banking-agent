@@ -48,7 +48,15 @@ def _draft_answer(text):
     import re
     value = text.strip().rstrip('.!?').strip()
     corrected = False
-    for _ in range(2):
+    # Discourse markers are removable only before an explicit correction cue.
+    # 'oh wait I meant Bob' is a correction; 'Wait Bob' remains an exact name
+    # answer, and quoted/reported commands are never searched for substrings.
+    lead = re.match(r"^(?:(?:oh|ah|oops)(?:,\s*|\s+))?"
+                    r"(?:(?:wait|hold on|hang on)(?:,\s*|\s+))?"
+                    r"(?=(?:i meant|actually|sorry|use|make that|make it|change|set)\b)", value, re.I)
+    if lead:
+        value = value[lead.end():].strip()
+    for _ in range(4):
         prefix = re.match(r'^(?:(?:actually|sorry)(?:,\s*|\s+)|no,\s*|(?:i meant|make that|make it|use|change it to)\s+)', value, re.I)
         if not prefix:
             break
