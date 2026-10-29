@@ -2,22 +2,29 @@
 
 **帮客力 | Banking AI Agent | Hackathon submission**
 
-**Document version:** 1.0. **Review date:** 29 October 2026. **Implementation snapshot:** repository commit `961ccee` on `feature/agent`. **Shared contracts:** 1.0.0.
+**Document version:** 1.1. **Implementation review:** 29 October 2026, repository commit `961ccee`. **Shared contracts:** 1.0.0. This editorial revision retains that implementation and verification snapshot.
 
-## 1 Project overview
+## 1 Executive summary
 
-bank.ly is a conversational banking prototype that turns natural-language requests into validated banking proposals and grounded replies. It covers spending analysis, transfers by verified recipient name, and recurring-payment detection with simulated subscription cancellation. All accounts, transactions and execution effects are synthetic. No live bank, payment network or merchant cancellation service is connected.
+Banking tasks often require users to navigate separate screens and repeat information. bank.ly brings selected tasks into one conversational interface while retaining explicit authorization for operations that change financial state. It demonstrates three challenge scenarios: smart transfers, spending analysis and subscription management.
 
-The application combines language-model interpretation with deterministic financial calculations and server-controlled authorization. Gemini or Groq extracts a structured intent. Python validates the extracted details, maintains an unfinished draft and constructs canonical tool proposals. The backend supplies account context, retrieves data, applies permission tiers and executes approved simulator operations. The model never receives authority to execute a transfer or cancellation.
+Natural-language requests become validated proposals and grounded replies. All accounts, transactions and execution effects are synthetic; no live bank, payment network or merchant cancellation service is connected.
+
+Gemini or Groq interprets natural language. Our application validates its output, calculates financial values deterministically and keeps execution under backend control. The model never receives authority to execute a transfer or cancellation.
+
+### Technical contributions
+
+1. **Grounded intent-to-action pipeline:** typed proposals and correlated tool results separate language understanding from verified financial facts and execution.
+2. **Recoverable conversations and dependent tasks:** persistent drafts support missing details, corrections and interruption; a bounded cancellation-then-transfer plan advances only after verified completion.
+3. **Guarded simulator execution:** permission tiers, action-bound approval, simulated MFA, persistent safety locks and transactional updates protect state-changing operations.
+
+These contributions are application engineering around existing model APIs; the project does not claim a newly trained model or a novel foundation-model algorithm.
 
 | Capability | Implemented scope |
 | --- | --- |
-| Balance queries | Automatic lookup of the selected demo account, with a reply grounded in its database record. |
 | Spending analysis | Monthly debit totals, category breakdowns and explainable anomaly flags. |
 | Smart transfers | Named verified recipients, amount clarification, corrections and explicit approval; simulated MFA when required. |
 | Subscription management | Recurring-charge candidates, stored-record eligibility and confirmed simulated cancellation. |
-| Ordered tasks | A fixed cancellation-then-transfer dependency plan, with a separate approval for each action. |
-| Conversation experience | Persistent chat history, separate chats, working memory, draft corrections and interruption. |
 
 This document explains the current implementation rather than claiming every example in the challenge brief is complete. Sections 2-3 describe the system; Sections 4-7 explain the algorithms; Sections 8-9 cover security; Sections 10-12 cover persistence, reproducibility, verification and remaining limitations.
 
@@ -33,8 +40,8 @@ The FastAPI backend is the composition root. It is the only application layer th
 %% architecture
 flowchart TD
   UI[React and TypeScript browser UI] --> API[FastAPI through Nginx]
-  API --> Agent[P1 agent controller]
-  API --> Modules[P3 finance P4 policy P5 subscriptions]
+  API --> Agent[Agent controller]
+  API --> Modules[Finance, policy and subscription modules]
   API --> DB[(PostgreSQL)]
   Agent <--> LLM[Gemini or Groq API]
 ```
@@ -43,10 +50,10 @@ flowchart TD
 | --- | --- |
 | React and TypeScript | Chat, saved conversations, account views, transaction views, subscription views and approval or MFA controls. |
 | Nginx and FastAPI | Serve the frontend, proxy `/api/v1`, resolve demo identity and coordinate controlled operations. |
-| Agent package P1 | Intent extraction, input grounding, clarification state, bounded planning and user-facing replies. |
-| Finance P3 | Exact spending aggregation, categorization and rule-based anomaly detection. |
-| Security P4 | Pure fail-closed policy decisions; P2 persists and enforces their outcomes. |
-| Subscriptions P5 | Pure recurrence detection, candidate mapping and cancellation eligibility. |
+| Agent controller | Intent extraction, input grounding, clarification state, bounded planning and user-facing replies. |
+| Finance module | Exact spending aggregation, categorization and rule-based anomaly detection. |
+| Security policy module | Pure fail-closed policy decisions; the backend persists and enforces their outcomes. |
+| Subscription module | Pure recurrence detection, candidate mapping and cancellation eligibility. |
 | SQLAlchemy and PostgreSQL | Accounts, ledger entries, stored subscriptions, approvals, audits, conversation state and transcripts. |
 
 The external model receives the request text, instructions and output schema. Account selection, recipient IDs, subscription state and tool-result validation are handled in application code. Financial reports are formatted locally rather than sent to an LLM to calculate or invent values.
@@ -54,6 +61,45 @@ The external model receives the request text, instructions and output schema. Ac
 Docker Compose runs frontend, backend and PostgreSQL services. SQLite supports local development and disposable tests. Independent mock adapters support module development, while the real agent also has a deterministic mock *interpretation provider*.
 
 **Implementation:** `backend/app/services/adapters.py`, `backend/app/api/chat.py`, `frontend/src/App.tsx`, `docker-compose.yml`, `infra/`.
+
+<!-- pagebreak -->
+
+### Request lifecycle: an approved transfer
+
+The following sequence connects the architecture to one user journey: "Transfer 50 CNY to Bob." The backend resolves the caller's account and verified recipient context. The agent uses language interpretation and validation to prepare a proposal; the backend owns approval and execution.
+
+```mermaid
+%% sequence
+sequenceDiagram
+  participant UI as Browser / user
+  participant API as Backend
+  participant Agent as Agent controller
+  participant Model as Gemini / Groq
+  participant DB as Database
+  UI->>API: Transfer 50 CNY to Bob
+  API->>DB: Load account and verified context
+  API->>Agent: Request, catalog and saved draft
+  Agent->>Model: Interpret request when needed
+  Model-->>Agent: Structured intent
+  Agent-->>API: Validated transfer proposal
+  API->>DB: Check policy; store approval ticket
+  API-->>UI: Exact proposal and confirmation controls
+  UI->>API: Confirm ticket; verify MFA if required
+  API->>DB: Recheck and commit guarded financial update
+  API->>Agent: Trusted execution result
+  Agent-->>API: Grounded completion reply
+  API-->>UI: Verified outcome and current action status
+```
+
+**Before approval:** the balance is unchanged. The ticket binds the exact proposed tool and financial arguments; a new request does not silently authorize an old ticket.
+
+**At execution:** the backend checks ownership, safety locks, current funds and the cumulative daily transfer threshold again. If the cumulative total exceeds CNY 1,000, strong verification is simulated before execution. Repeating confirmation for the same completed ticket does not debit it again.
+
+**After execution:** the backend supplies a trusted, correlated outcome. The agent reports completion only from that result. A timeout during interpretation produces no new proposal; an execution failure rolls back partial financial writes.
+
+Recognized simple requests may use local interpretation shortcuts, so the model exchange is conditional. For a balance or spending query, there is no approval step: the backend executes the permitted read and returns its result for a grounded reply. All illustrated financial effects occur in the synthetic simulator.
+
+**Implementation:** `backend/app/api/chat.py`, `backend/app/api/approvals.py`, `backend/app/api/continuation.py`, `backend/app/services/action_execution.py`, `agent/service.py`.
 
 <!-- pagebreak -->
 
@@ -71,7 +117,7 @@ Shared Pydantic v2 models define the module boundaries. Unexpected fields are fo
 
 The backend constructs catalog entries shaped as `{name, parameters, context}`. Argument schemas come from `TOOL_ARGUMENT_MODELS`; trusted context supplies the selected account, verified recipients, stored subscriptions and conversation state. This is an application catalog, not a grant of native SDK tool-execution authority to the model.
 
-The public P1 entry point is unchanged:
+The public agent interface is:
 
 ```python
 process_message(chat: ChatInput, tool_catalog: list[dict],
@@ -355,7 +401,7 @@ docker compose up -d --build
 
 The website is available at `http://localhost:3000` and API documentation at `http://localhost:8000/docs`. Gemini is selectable through `AGENT_PROVIDER=gemini`, `GEMINI_API_KEY` and `GEMINI_MODEL`. Model availability is provider-dependent; configure an accessible model explicitly. Default provider requests time out after 20 seconds, configurable within 1-60 seconds.
 
-For an offline demonstration, keep `USE_MOCK_AGENT=false` and set `AGENT_PROVIDER=mock`. This runs the actual P1 agent with deterministic interpretation and the normal backend, finance and security flow. Setting `USE_MOCK_AGENT=true` selects a different backend stub and is not equivalent. The standalone agent CLI uses synthetic fixture tools rather than the website database.
+For an offline demonstration, keep `USE_MOCK_AGENT=false` and set `AGENT_PROVIDER=mock`. This runs the actual agent controller with deterministic interpretation and the normal backend, finance and security flow. Setting `USE_MOCK_AGENT=true` selects a different backend stub and is not equivalent. The standalone agent CLI uses synthetic fixture tools rather than the website database.
 
 ### Verification snapshot on 29 October 2026
 
@@ -381,27 +427,31 @@ Frontend checks are `npm run build` and `npm test` from `frontend/`. The 22 skip
 
 <!-- pagebreak -->
 
-## 12 Scope boundaries and remaining risks
+## 12 Scope, limitations and future work
 
 The prototype demonstrates the three selected banking scenarios and the Green, Yellow and Red approval model using synthetic data. It does not claim complete implementation of every challenge example or production banking readiness.
 
-| Challenge area | Current boundary |
-| --- | --- |
-| Smart transfers | Verified demo recipient names are supported; phone-number lookup, scheduled transfers and split-bill collection are not. The recipient directory is demo context, not a complete customer address book. |
-| Bill analysis | Monthly reports and rule-based flags are supported. A full annual-report interaction is not exposed through the current agent tools. |
-| Subscriptions | Detection and simulated cancellation are supported. Renewal reminders, scheduled notifications and real merchant integrations are absent. |
-| Wealth and cards | Investment operations and card-management tools are outside this implementation. |
-| General task planning | The fixed two-node graph is implemented. Arbitrary DAG generation, birthday scheduling and third-party purchasing are not. |
-| Rollback and takeover | Failed financial writes are rolled back. Completed business actions have no automatic compensation; human-takeover wording pauses a plan but does not assign an operator. |
-| Generated-code sandbox | No generated code is executed; operations use a fixed whitelist. A restricted, monitored arbitrary-code sandbox has not been implemented. |
-| Security and operations | Demo identity, simulated MFA, default development database credentials and permissive development CORS remain. TLS termination, real authentication, independent MFA delivery, secret management, comprehensive audit coverage and production rate limits require deployment hardening. |
+### Prototype simplifications
 
-Before any real-customer or public deployment, the team would need verified authentication and authorization, protected storage and retention controls, production database and PostgreSQL concurrency validation, independent verification delivery, controlled operations access and real banking or merchant integration agreements. These are future requirements, not properties established by the current demo.
+Accounts, recipients, ledger changes and subscription cancellation are synthetic. The recipient directory is demo context, not a customer address book. The demo identity header is not authentication; callers can select another known demo identity. OTP delivery through the console and demo inbox demonstrates the verification lifecycle but is not an independent production factor. No live bank settlement or merchant cancellation takes place.
+
+### Challenge coverage and functional boundaries
+
+| Area | Implemented demonstration and boundary |
+| --- | --- |
+| Three selected scenarios | Named transfers, monthly spending with anomaly flags, and recurring-charge detection with cancellation. Phone-number lookup, scheduled transfers, split bills, annual-report interaction and renewal reminders are not implemented. |
+| Additional scenario families | Wealth operations, card management, birthday scheduling and third-party purchasing are outside the selected scope. |
+| Planning and recovery | A fixed two-node dependency graph supports cancellation then transfer. Arbitrary DAG generation is absent. Failed writes roll back; completed operations have no automatic compensation. Human-takeover wording pauses work but does not assign an operator. |
+| Generated-code execution | The application invokes whitelisted operations and never executes model-generated code. A general restricted-code sandbox has not been implemented. |
+
+### Requirements before production deployment
+
+Before real-customer or public deployment, the system needs verified authentication and authorization, independent MFA delivery, TLS, managed secrets, restricted CORS, protected storage, retention controls, rate limits and comprehensive audit coverage. Development database credentials must be replaced. PostgreSQL concurrency and migration checks must run in a dedicated environment; the skipped checks in Section 11 are an explicit evidence gap. Real banking and merchant integrations require separate agreements and validation. These are future requirements, not properties established by the demo.
 
 ### Implementation evidence and interpretation
 
-The challenge brief is the user-supplied **Banking AI Agent** AI-track document. The original team-interface specification describes the initial engineering baseline; `README.md` and executable contracts record later corrections. This documentation resolves differences using the inspected code and fresh test results, rather than repeating historical milestone assertions.
+The submission scope follows the **Banking AI Agent** AI-track challenge brief. Implementation claims are grounded in the reviewed repository snapshot, executable shared contracts and the verification results in Section 11. The original team-interface specification documents the initial baseline; executable contracts resolve subsequent interface changes.
 
-For review, the main source groups are `agent/` for interpretation and planning; `backend/app/api/` and `backend/app/services/` for orchestration and execution; `backend/app/db/` and `backend/migrations/` for persistence; `finance/`, `security/` and `subscriptions/` for deterministic domain logic; and `frontend/` plus `infra/` for presentation and local deployment. Module documentation under `docs/` supplies additional rationale, but older test counts and historical vulnerability descriptions may refer to earlier revisions.
+Source evidence is organized under `agent/` for interpretation and planning; `backend/` for APIs, execution and persistence; `finance/`, `security/` and `subscriptions/` for domain logic; and `frontend/` plus `infra/` for presentation and deployment. Section-level implementation references identify the relevant files. Historical module notes may describe earlier revisions.
 
 **Submission statement:** bank.ly combines existing language-model APIs with our typed agent controller, deterministic financial algorithms, persistent state and guarded simulator execution. The project uses existing models for interpretation; it does not claim to have trained a foundation model or implemented a live banking service.
