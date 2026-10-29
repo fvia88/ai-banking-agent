@@ -106,7 +106,7 @@ All test suites were executed sequentially from the repository root with `$env:P
 
 Earlier revisions of this document recorded `3 failed` for an older version of the concurrency regression tests on file-backed SQLite (historical result, not re-run here). Since then, P2 landed the execution guard (`execute_claimed_action` in `backend/app/services/action_execution.py`), exclusive row locks (`with_for_update()`), and Shanghai midnight day rollover (`backend/app/services/daily_transfers.py`).
 
-Fresh execution of the current `backend/tests/test_security_concurrency.py` on HEAD `4ab698a` (run twice: 6 passed, 6 skipped each time) shows that the 3 previously reported defect scenarios are **not reproduced on file-backed SQLite**:
+Fresh execution of the current `backend/tests/test_security_concurrency.py` on HEAD (since commit `4ab698a` / current HEAD `0fbc25d`) shows that the 3 previously reported defect scenarios are **not reproduced on file-backed SQLite**:
 
 1. **Duplicate Concurrent Yellow Confirmations (Previously Defect 1 / RR-01)**:
    - *Status*: **NOT REPRODUCED (SQLite)** (`test_same_yellow_action_cannot_execute_twice[sqlite]` **PASSED**).
@@ -128,7 +128,7 @@ Fresh execution of the current `backend/tests/test_security_concurrency.py` on H
 
 ## 6. Decision and Control Audit Event Coverage
 
-The backend implementation emits 12 explicit `AuditLogModel` action types:
+The backend implementation follows an application-level append-only logging pattern through `AuditLogModel` (database-level or cryptographic immutability is not enforced) and emits 12 explicit action types:
 
 1. `TRANSFER_EXECUTED_ATOMIC`: Atomic database execution of transfers.
 2. `SUBSCRIPTION_CANCELLED`: Confirmed cancellation of recurring subscriptions.
@@ -150,20 +150,20 @@ The backend implementation emits 12 explicit `AuditLogModel` action types:
 
 ---
 
-## 7. Human Takeover and Generated-Code Sandbox Boundaries
+## 7. Human Takeover and Generated-Code Sandbox Scope Exclusions
 
-> [!WARNING]
-> Both items below are **architectural scope limitations requiring formal team alignment**. Neither feature is implemented, and neither has been formally de-scoped by the team.
+> [!NOTE]
+> The team has formally confirmed that **Human Takeover and additional feature development are out of scope for now**. The sections below document the architectural boundaries of the current implementation.
 
 ### 7.1 Human Takeover Status
-Bank.ly does NOT implement a general human takeover queue, operator-assigned review workflow, or ticket routing system. The sole human intervention mechanism is `reset_safety_lock` in `backend/app/services/safety_lock.py`, which permits a local demo operator to reset an automatic lockout with a mandatory review reason (1-200 chars). This is an administrative lock-clear function and must not be characterized as a general human takeover queue.
+Bank.ly does NOT implement a general human takeover queue, operator-assigned review workflow, or ticket routing system; this capability has been formally confirmed as out of scope for the current release. The sole human intervention mechanism is `reset_safety_lock` in `backend/app/services/safety_lock.py`, which permits a local demo operator to reset an automatic lockout with a mandatory review reason (1-200 chars). This is an administrative lock-clear function and must not be characterized as a general human takeover queue.
 
 ### 7.2 Arbitrary Generated-Code Sandboxing
 The Bank.ly AI Banking Agent does NOT execute arbitrary generated code (no Python `eval`/`exec`, no shell commands, no script interpreter). The LLM's agency is strictly confined to generating structured tool proposals (`ActionProposal`) matching a frozen whitelist of five tools (`ToolName`). Arguments are strictly validated by Pydantic models with `extra="forbid"`.
 
 > [!IMPORTANT]
 > **Typed tool whitelisting is NOT an arbitrary generated-code sandbox.**
-> No operating-system-level sandbox (such as gVisor, Firecracker, or container isolation per invocation) is implemented in Bank.ly. The architecture prevents unauthorized actions via schema validation and pure policy evaluation, not via runtime execution sandboxing of untrusted code.
+> No operating-system-level sandbox (such as gVisor, Firecracker, or container isolation per invocation) is implemented in Bank.ly. Runtime OS sandboxing is out of scope; the architecture prevents unauthorized actions via schema validation and pure policy evaluation, not via runtime execution sandboxing of untrusted code.
 
 ---
 
@@ -190,14 +190,21 @@ The Bank.ly AI Banking Agent does NOT execute arbitrary generated code (no Pytho
 - **Single-action Red MFA challenge lifecycle and same-action `/verify` atomic claim**: Verified by **18 passed** tests in `backend/tests/test_mfa.py`.
 - **Shanghai banking day rollover lifecycle**: Verified by `test_first_concurrent_transfers_of_new_day_reset_once[sqlite]`.
 
-### Unverified or Partial Areas (Clear Boundary Demarcation)
+### Unverified or Out-of-Scope Areas (Clear Boundary Demarcation)
 - **PostgreSQL Concurrency Verification**: Skipped in automated test runs due to absent PostgreSQL test environment (`MIGRATION_TEST_POSTGRES_ADMIN_URL`). Remains **NOT VERIFIED**.
 - **Initial Proposal & Read Authorization Auditing**: Proposals and read actions are not recorded in `AuditLogModel` (owned by P2 in `backend/app/api/chat.py`).
-- **Human Takeover Queue**: Not implemented (only the administrative safety-lock reset exists). Classified as an **architectural scope limitation requiring formal team alignment**; it has not been formally de-scoped.
-- **Arbitrary Generated-Code Sandboxing**: Not implemented (typed tool whitelisting is used instead, which is not a sandbox). Classified as an **architectural scope limitation requiring formal team alignment**; it has not been formally de-scoped.
+- **Database-Level Audit Immutability**: The application follows an append-only logging pattern; database-level or cryptographic immutability is not enforced.
+- **Human Takeover Queue**: Not implemented; formally confirmed by the team as out of scope for the current release.
+- **Arbitrary Generated-Code Sandboxing**: Not implemented (typed tool whitelisting is used instead); runtime OS sandboxing is out of scope.
 
 ### Final P4 Acceptance Recommendation
-**CONDITIONALLY READY**:
-- All P4-owned deliverables (`security/policy.py`, `security/rules.py`, `security/tests/test_policy.py`, `backend/tests/test_security_bridge.py`, `backend/tests/test_security_concurrency.py`, and `docs/security/*`) are fully implemented, strictly conform to frozen contracts v1.0.0, and pass in all runnable automated suites (336 unique passing test items repository-wide = 84 + 14 + 238; the bridge, integration, and concurrency suites are subsets of the 238 backend tests; 22 backend tests skipped, all PostgreSQL-only).
-- Previously reported SQLite concurrency failures are not reproduced on HEAD `4ab698a` with P2's execution guard in place. This is SQLite evidence only.
-- Final sign-off is conditioned upon (1) PostgreSQL concurrency tests actually being run and passing, (2) team confirmation of the decision/control audit gaps (proposal creation and read-only queries are not audited), and (3) formal team alignment on the Human Takeover and Arbitrary Code Sandbox scope limitations, neither of which is implemented or formally de-scoped.
+
+#### A. Competition Submission & Demo Readiness: READY
+- All P4-owned deliverables (`security/policy.py`, `security/rules.py`, `security/tests/test_policy.py`, `backend/tests/test_security_bridge.py`, `backend/tests/test_security_concurrency.py`, and `docs/security/*`) are implemented, conform to frozen contracts v1.0.0, and pass in all runnable automated suites in the test environment (336 unique passing test items repository-wide = 84 + 14 + 238; the bridge, integration, and concurrency suites are subsets of the 238 backend tests; 22 backend tests skipped, all PostgreSQL-only).
+- The core security policy engine, risk tiers, daily transfer limits, execution guard, and MFA challenge lifecycle are verified on file-backed SQLite, satisfying all functional requirements for competition submission and demonstration.
+- Team-confirmed scope exclusions (Human Takeover Queue and runtime OS sandboxing) are documented as current scope boundaries.
+
+#### B. Production Deployment Readiness: CONDITIONALLY READY (Pre-Production Prerequisites Outstanding)
+Production deployment cannot be declared based on passing SQLite test suites alone. The following prerequisites remain outstanding before any production release:
+1. **PostgreSQL Concurrency Under Load**: Multi-session concurrency, transaction serialization, and row-locking under real PostgreSQL must be verified by running the 6 skipped concurrency tests in a staging environment with `MIGRATION_TEST_POSTGRES_ADMIN_URL` configured.
+2. **Audit Logging Enhancements**: Team acceptance or remediation of the documented audit coverage boundaries (initial proposal creation in `POST /api/v1/chat` and read-only query authorizations do not emit `AuditLogModel` records; database-level tamper-proofing/immutability is not enforced).
