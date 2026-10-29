@@ -4,6 +4,14 @@
 **Contract Version**: 1.0.0  
 **Scope**: `security/` and `docs/security/`
 
+This describes the prototype's trust boundaries, not production security
+certification. Identity uses a demo header, MFA and merchant cancellation are
+simulated, and no real bank is connected. Audit rows are ordinary database
+records, not cryptographically tamper-evident storage. Coverage is incomplete
+for initial decisions and agent controls; see the
+[coverage and limitations](../app/broader_requirements_review.md) and
+[execution safety](../app/execution_safety.md) guides.
+
 ---
 
 ## 1. System Overview & Architecture Boundaries
@@ -31,7 +39,7 @@ flowchart TD
         ApprovalToken["Cryptographic Action Digest & Token Binding"]
         UserMFA["Simulated MFA / Explicit User Confirmation"]
         DBExecution["Atomic DB Transaction (Row Lock, Idempotency)"]
-        AuditLog["Immutable Audit Trail"]
+        AuditLog["Persisted Execution Audit"]
     end
 
     ActionProposal --> Validation
@@ -74,7 +82,7 @@ flowchart TD
 
 ### R — Repudiation
 * **Threat**: User claims they never authorized a high-value transfer.
-* **Mitigation**: Actions exceeding `CNY 1,000.00` cumulative daily total are categorized as `Tier.RED` requiring multi-factor authentication (MFA). All policy decisions output explicit machine-readable `reason_code` values that are permanently recorded in the tamper-evident backend audit log (`AuditEvent`).
+* **Mitigation**: Actions exceeding `CNY 1,000.00` cumulative daily total are categorized as `Tier.RED` requiring simulated MFA. Policy decisions return explicit machine-readable `reason_code` values. The backend persists execution, escalation, and selected refusal events; this is not complete decision auditing or tamper-evident storage.
 
 ### I — Information Disclosure
 * **Threat**: Attacker queries balances or spending analytics for accounts they do not own.

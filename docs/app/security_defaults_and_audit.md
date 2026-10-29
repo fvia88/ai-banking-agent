@@ -53,9 +53,8 @@ An action already Red at proposal time should show only the challenge event.
 If the daily total is already high, both proposals may start Red and do not
 demonstrate escalation.
 
-## Documentation ownership
+## Related guides
 
-This document and the updated docs/app notes describe current P2 runtime
-behavior. Some P4-owned docs/security reviews still describe the older opt-in
-default or earlier runtime gaps; those are historical snapshots and need a P4
-refresh. They were not edited outside P2's owned paths.
+See [execution safety](execution_safety.md) for locking and transaction boundaries,
+[safety locks](safety_lock.md) for operator recovery, and the
+[threat model](../security/threat_model.md) for trust boundaries and limitations.

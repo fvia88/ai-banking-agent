@@ -150,7 +150,7 @@ workflow. Completed operations are not automatically reversed. Full decision/con
 auditing, page-refresh recovery, malformed stored-transaction handling, and extreme
 year validation remain documented limitations, not implemented guarantees.
 
-Module handoff notes may describe older milestones. For current app behavior, use:
+Current deployment, behavior, and module documentation:
 
 - [Deployment and local development](docs/app/deployment.md)
 - [Database upgrades and preservation](docs/app/database_migrations.md)
@@ -160,3 +160,8 @@ Module handoff notes may describe older milestones. For current app behavior, us
 - [Trusted agent continuation](docs/app/agent_continuation.md)
 - [Frontend metadata contract](docs/app/frontend_metadata_transport.md)
 - [Broader requirement coverage and limits](docs/app/broader_requirements_review.md)
+- [Agent integration contract](docs/agent/integration.md)
+- [Finance calculation rules](docs/finance/RULES.md)
+- [Simulated MFA behavior and demo](docs/finance/MFA.md)
+- [Security threat model](docs/security/threat_model.md)
+- [Subscription detection and eligibility](docs/subscriptions/README.md)
