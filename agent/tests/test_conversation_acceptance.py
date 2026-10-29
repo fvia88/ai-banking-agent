@@ -40,7 +40,7 @@ def test_p1_rehearsal(monkeypatch):
     assert '1843.00' not in rejected.result.reply
     print('Check: September report rejected; October request remains pending.')
     accepted = send(spending, chat.conversation_id, chat.message, [envelope])
-    assert accepted.result.reply.startswith('Verified spending for 2026-10: CNY 1843.00.')
+    assert 'You spent CNY 1843.00 in October 2026.' in accepted.result.reply
     assert not accepted.state.pending_tool_requests
 
     print('\n2. TRANSFER: retain amount and resolve ambiguous Alice')
@@ -68,7 +68,7 @@ def test_p1_rehearsal(monkeypatch):
     assert turn.result.needs_clarification and not turn.result.proposals
     turn = send(safety, 'rehearsal_safety', 'never mind')
     assert not turn.result.proposals and turn.state.pending_transfer is None
-    assert turn.result.reply == 'Unfinished request discarded.'
+    assert turn.result.reply == "Noted, I've discarded your unfinished request."
     print('\nPASS: all rehearsal checks passed. Transfers/cancellations were proposals only.')
 
 
@@ -113,7 +113,7 @@ def test_bounded_plan_waits_for_cancellation_completion_before_transfer(monkeypa
     assert advanced.state.pending_plan.steps[0].status == 'completed'
     mfa = send('result', [outcome(transfer, 'PENDING_MFA', 'transfer_action')])
     assert not mfa.result.proposals and mfa.state.pending_plan is not None
-    assert 'Completion is not confirmed' in mfa.result.reply
+    assert "hasn't been completed yet" in mfa.result.reply
     finished = send('result', [outcome(transfer, 'COMPLETED', 'transfer_action')])
     assert not finished.result.proposals and finished.state.pending_plan is None
     assert 'Plan completed' in finished.result.reply
@@ -426,7 +426,7 @@ def test_cancellation_rechecks_current_context(monkeypatch, change):
 def test_cancellation_abandonment_does_not_cancel_subscription(monkeypatch):
     catalog, first = start_cancellation(monkeypatch)
     discarded = process_turn(ChatInput(conversation_id='cancel_memory', message='never mind'), catalog)
-    assert discarded.result.reply == 'Unfinished request discarded.'
+    assert discarded.result.reply == "Noted, I've discarded your unfinished request."
     assert not discarded.result.proposals and discarded.state.pending_cancellation is None
     save_state(catalog, discarded)
     assert not process_turn(ChatInput(conversation_id='cancel_memory', message='StreamBox'), catalog).result.proposals
@@ -489,7 +489,7 @@ def test_spending_month_followup_retains_request_without_provider(monkeypatch):
     assert '1843' not in final.result.reply  # No tool result has been supplied.
 
 
-@pytest.mark.parametrize('answer', ['2026-00', '2026-13', '0000-11', '2026-1', 'November',
+@pytest.mark.parametrize('answer', ['2026-00', '2026-13', '0000-11',
                                     '2026-11 send 500 to Bob'])
 def test_invalid_spending_month_preserves_draft(monkeypatch, answer):
     catalog, first = start_spending(monkeypatch)
@@ -498,10 +498,56 @@ def test_invalid_spending_month_preserves_draft(monkeypatch, answer):
     assert turn.state == first.state
 
 
+@pytest.mark.parametrize('answers,period', [(['October', '2026'], '2026-10'),
+    (['2026', 'oct'], '2026-10'), (['October 2026'], '2026-10'),
+    (['2026-1'], '2026-01'), (['2026/10'], '2026-10'),
+    (['September', '2026-13', '2026'], '2026-09')])
+def test_flexible_spending_dates_retain_only_user_supplied_parts(monkeypatch, answers, period):
+    catalog, _ = start_spending(monkeypatch)
+    def unavailable():
+        raise AssertionError('Date follow-ups should not need a provider')
+    monkeypatch.setattr(service, 'get_provider', unavailable)
+    for index, answer in enumerate(answers):
+        turn = process_turn(ChatInput(conversation_id='spending_memory', message=answer), catalog)
+        if index < len(answers) - 1:
+            assert turn.result.needs_clarification and not turn.result.proposals
+        save_state(catalog, turn)
+    assert turn.result.proposals[0].arguments['period'] == period
+    assert turn.state.pending_spending is None
+
+
+@pytest.mark.parametrize('message,question', [('what did I spend in October', 'Which year'),
+    ('Analyze spending in 2026', 'Which month in 2026')])
+def test_model_cannot_invent_spending_year_or_month(monkeypatch, message, question):
+    class HallucinatedDate:
+        def extract(self, text):
+            return '{"intent":"spending","period":"2023-10"}'
+    monkeypatch.setattr(service, 'get_provider', lambda: HallucinatedDate())
+    turn = process_turn(ChatInput(conversation_id='dates', message=message), demo_catalog())
+    assert not turn.result.proposals and question in turn.result.reply
+    assert turn.state.pending_spending.year != 2023
+    catalog = demo_catalog()
+    save_state(catalog, turn)
+    answer = '2026' if 'October' in message else 'October'
+    final = process_turn(ChatInput(conversation_id='dates', message=answer), catalog)
+    assert final.result.proposals[0].arguments['period'] == '2026-10'
+
+
+@pytest.mark.parametrize('message', ['Transfer 40 to vov', 'Transfer 40 to Alice'])
+def test_unknown_and_ambiguous_recipients_are_distinguished(monkeypatch, message):
+    monkeypatch.setenv('AGENT_PROVIDER', 'mock')
+    turn = process_turn(ChatInput(conversation_id='names', message=message), demo_catalog())
+    assert not turn.result.proposals and turn.result.needs_clarification
+    if 'vov' in message:
+        assert 'vov' in turn.result.reply and "couldn't find anyone" in turn.result.reply
+    else:
+        assert 'More than one recipient' in turn.result.reply
+
+
 def test_spending_abandonment_clears_draft(monkeypatch):
     catalog, first = start_spending(monkeypatch)
     discarded = process_turn(ChatInput(conversation_id='spending_memory', message='never mind'), catalog)
-    assert discarded.result.reply == 'Unfinished request discarded.'
+    assert discarded.result.reply == "Noted, I've discarded your unfinished request."
     assert discarded.state.pending_spending is None and discarded.state.awaiting is None
     save_state(catalog, discarded)
     late = process_turn(ChatInput(conversation_id='spending_memory', message='2026-11'), catalog)

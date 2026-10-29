@@ -51,7 +51,7 @@ def test_completion_consumes_original_and_replay_is_cached(client, db_session, m
     result = deliver(client, action)
     assert result.status_code == 200, result.text
     assert result.json()["execution"]["status"] == "COMPLETED"
-    assert "confirmed completion" in result.json()["chat"]["reply"]
+    assert "is complete" in result.json()["chat"]["reply"]
     assert not saved(db_session)["pending_tool_requests"]
     monkeypatch.setattr(agent_service, "process_turn", lambda *a, **kw: pytest.fail("replay called P1"))
     assert deliver(client, action).json() == result.json()
@@ -73,7 +73,8 @@ def test_mfa_waits_then_completes_without_forwarding_secret(client, db_session, 
     monkeypatch.setattr(agent_service, "process_turn", capture)
     pending = deliver(client, action)
     assert pending.status_code == 200, pending.text
-    assert "PENDING_MFA" in pending.json()["chat"]["reply"]
+    assert pending.json()['execution']['status'] == 'PENDING_MFA'
+    assert "verify your identity" in pending.json()["chat"]["reply"]
     assert len(saved(db_session)["pending_tool_requests"]) == 1
     action_id = action["approval"]["action_id"]
     verified = client.post(f"/api/v1/actions/{action_id}/verify", headers=ALICE,
@@ -99,7 +100,9 @@ def test_terminal_failure_is_consumed_honestly(client, db_session, failure):
     update = deliver(client, action)
     assert update.status_code == 200, update.text
     assert update.json()["execution"]["status"] in {"REJECTED", "FAILED", "CANCELLED"}
-    assert "Completion is not confirmed" in update.json()["chat"]["reply"]
+    expected = {'REJECTED': "wasn't approved", 'FAILED': "couldn't confirm", 'CANCELLED': 'request has been cancelled'}
+    assert expected[update.json()['execution']['status']] in update.json()["chat"]["reply"]
+    assert 'is complete.' not in update.json()['chat']['reply']
     assert not saved(db_session)["pending_tool_requests"]
     assert db_session.query(TransactionModel).filter_by(category="Transfers").count() == 0
 
@@ -229,7 +232,7 @@ def test_missed_callback_recovers_on_next_chat(client, db_session):
         "conversation_id": "continuation", "message": "What is my balance?",
     })
     assert result.status_code == 200, result.text
-    assert "confirmed completion" in result.json()["reply"]
+    assert "is complete" in result.json()["reply"]
     assert "15230.00" in result.json()["reply"]
     assert not saved(db_session)["pending_tool_requests"]
 

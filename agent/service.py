@@ -43,14 +43,83 @@ def clarify(reply):
     return AgentResult(reply=reply, needs_clarification=True)
 
 
+def _draft_answer(text):
+    """Unwrap explicit correction phrases, never infer new banking details."""
+    import re
+    value = text.strip().rstrip('.!?').strip()
+    corrected = False
+    # Discourse markers are removable only before an explicit correction cue.
+    # 'oh wait I meant Bob' is a correction; 'Wait Bob' remains an exact name
+    # answer, and quoted/reported commands are never searched for substrings.
+    lead = re.match(r"^(?:(?:oh|ah|oops)(?:,\s*|\s+))?"
+                    r"(?:(?:wait|hold on|hang on)(?:,\s*|\s+))?"
+                    r"(?=(?:i meant|actually|sorry|use|make that|make it|change|set)\b)", value, re.I)
+    if lead:
+        value = value[lead.end():].strip()
+    for _ in range(4):
+        prefix = re.match(r'^(?:(?:actually|sorry)(?:,\s*|\s+)|no,\s*|(?:i meant|make that|make it|use|change it to)\s+)', value, re.I)
+        if not prefix:
+            break
+        value = value[prefix.end():].strip()
+        corrected = True
+    field = re.match(r'^(?:change|set) (?:the |my )?(amount|recipient|month|year|subscription) to\s+', value, re.I)
+    target = field[1].casefold() if field else None
+    if field:
+        value = value[field.end():].strip()
+        corrected = True
+    if re.search(r'\s+instead$', value, re.I):
+        corrected = True
+    if corrected:
+        value = re.sub(r'\s+instead$', '', value, flags=re.I).strip()
+    return value, target, corrected
+
+
+def _spending_date(text, *, answer=False):
+    """Read only dates actually stated by the user; never accept a model's year."""
+    import re
+    names = ('january', 'february', 'march', 'april', 'may', 'june',
+             'july', 'august', 'september', 'october', 'november', 'december')
+    normalized = text.casefold().strip().rstrip('.!?')
+    dates = re.findall(r'(?<!\d)(\d{4})[-/](\d{1,2})(?!\d)', normalized)
+    years = {int(y) for y in re.findall(r'(?<!\d)\d{4}(?!\d)', normalized)}
+    months = {int(m) for _, m in dates}
+    for number, name in enumerate(names, 1):
+        if re.search(r'\b(?:' + name + '|' + name[:3] + (r'|sept' if number == 9 else '') + r')\b', normalized):
+            months.add(number)
+    if re.fullmatch(r'\d{1,2}', normalized):
+        months.add(int(normalized))
+    invalid = (len(years) > 1 or len(months) > 1 or any(not 1 <= m <= 12 for m in months)
+               or any(not 1 <= y <= 9999 for y in years))
+    if answer:
+        rest = re.sub(r'\d{4}[-/]\d{1,2}|\b\d{4}\b|\b\d{1,2}\b', ' ', normalized)
+        for name in (*names, *(name[:3] for name in names), 'sept'):
+            rest = re.sub(r'\b' + name + r'\b', ' ', rest)
+        rest = re.sub(r'\b(in|for|of|the|year|month|please)\b|[,./-]', ' ', rest)
+        invalid = invalid or bool(rest.strip())
+    return (next(iter(years), None), next(iter(months), None), invalid)
+
+
+def _recipient_question(name, matches):
+    if matches:
+        return "More than one recipient matches that name. Please enter their full name from your verified recipient list."
+    import json
+    import re
+    # Echo ordinary names only, never arbitrary instructions or markup.
+    if len(name) <= 64 and re.fullmatch(r"[\w .'-]+", name) and not re.search(
+            r'\b(ignore|instructions?|system|assistant|execute|cancel|send|pay|transfer)\b', name, re.I):
+        return f"I couldn't find anyone named {json.dumps(name, ensure_ascii=False)} in your verified recipient list. Please check the name or choose another recipient."
+    return "I couldn't find a matching recipient in your verified list. Please check the name or choose another recipient."
+
+
 def _subscription_reply(report: SubscriptionReport) -> str:
     """Display report candidates as data, never as verified subscription state."""
     import json
     import re
     if not report.candidates:
-        return ("No recurring-charge candidates were reported. This does not prove "
-                "that you have no active subscriptions. No cancellation has been requested.")
-    lines = [f"Found {len(report.candidates)} recurring-charge candidates:"]
+        return ("I didn't find any recurring payments in this report. You may still have "
+                "subscriptions that aren't visible here. Nothing has been cancelled.")
+    count = len(report.candidates)
+    lines = [f"🔎 I found {count} possible recurring {'payment' if count == 1 else 'payments'}:"]
     cadences = {"weekly": "weekly", "monthly": "monthly", "annual": "annually",
                 "unknown": "(cadence unknown)"}
     for index, candidate in enumerate(report.candidates[:5], 1):
@@ -61,7 +130,7 @@ def _subscription_reply(report: SubscriptionReport) -> str:
         lines.append(f"- {name}: estimated CNY {candidate.estimated_amount:.2f} {cadences[candidate.cadence.value]}.")
     if len(report.candidates) > 5:
         lines.append(f"{len(report.candidates) - 5} more candidates are in the report.")
-    lines.append("These are not proof of active subscriptions. No cancellation has been requested.")
+    lines.append("These look like recurring payments, but I can't confirm they're active subscriptions. Nothing has been cancelled.")
     return "\n".join(lines)
 
 
@@ -83,7 +152,9 @@ def _spending_reply(report: SpendingReport) -> str:
         "INVALID_TIMESTAMP": "an invalid timestamp excluded from totals",
         "INVALID_AMOUNT": "an invalid amount or direction excluded from totals",
     }
-    lines = [f"Verified spending for {report.period}: CNY {report.total_spending:.2f}."]
+    from datetime import datetime
+    month = datetime.strptime(report.period, '%Y-%m').strftime('%B %Y')
+    lines = [f"📊 You spent CNY {report.total_spending:.2f} in {month}."]
     categories = sorted(report.category_totals.items(), key=lambda item: (-item[1], item[0]))
     if categories:
         labels = []
@@ -92,7 +163,7 @@ def _spending_reply(report: SpendingReport) -> str:
                 and not re.search(r"\b(ignore|instructions?|system|assistant|execute|cancel|send|pay|transfer)\b", label, re.I))
             display = json.dumps(label, ensure_ascii=False) if ordinary_label else f"Category {index} (label withheld)"
             labels.append(f"{display}: CNY {amount:.2f}")
-        lines.append("Largest reported categories: " + "; ".join(labels) + ".")
+        lines.append("Here's where most of it went:\n" + "\n".join(f"- {label}" for label in labels))
         if len(categories) > 3:
             lines.append(f"{len(categories) - 3} more categories are in the report.")
         if sum(report.category_totals.values(), Decimal(0)) != report.total_spending:
@@ -111,7 +182,7 @@ def _spending_reply(report: SpendingReport) -> str:
             lines.append(f"{len(report.anomalies) - 3} more flags are in the report.")
     else:
         lines.append("No anomalies were reported.")
-    lines.append("Under the team's default spending rules: Credits are excluded, refunds do not reduce spending, and outbound transfers count as spending.")
+    lines.append("How this is counted: Credits are excluded, refunds do not reduce spending, and outbound transfers count as spending.")
     return "\n".join(lines)
 
 
@@ -147,9 +218,11 @@ def process_turn(chat: ChatInput, tool_catalog: list[dict],
         # not approval, execution, or subscription cancellation. Do not swallow
         # an execution result if this call is actually processing tool results.
         if not tool_results and is_abandonment(chat.message):
-            reply = ("Unfinished request discarded." if any(draft is not None for draft in
+            reply = ("Noted, I've discarded your unfinished request." if any(draft is not None for draft in
                      (original.pending_transfer, original.pending_spending, original.pending_cancellation))
-                     else "There is no unfinished request to discard.")
+                     else "No worries 🙂 What would you like to do next?")
+            if original.pending_tool_requests:
+                reply += " Existing approval cards are unchanged. Use the action card to cancel an approval."
             return ConversationTurn(result=AgentResult(reply=reply),
                                     state=ConversationState(conversation_id=chat.conversation_id,
                                         pending_tool_requests=original.pending_tool_requests))
@@ -166,10 +239,16 @@ def process_turn(chat: ChatInput, tool_catalog: list[dict],
             elif social in {'help', 'what can you do', 'what can you help me with'}:
                 reply = help_reply
             elif social in {'ok', 'okay', 'oki', 'thanks', 'thank you', 'thankyou', 'ty', 'got it', 'understood'}:
-                reply = ("Acknowledged. This does not confirm or execute any proposed action."
+                reply = ("You're welcome 🙂 Your request is still waiting. Use the action card when you're ready to continue. This message doesn't approve it."
                          if original.pending_tool_requests else "You're welcome. What would you like help with next?")
+            elif social in {"idk", "i don't know", "i dont know", "not sure", "i'm not sure", "im not sure", "no idea"}:
+                reply = "No worries 🙂 We can take it one step at a time. Would you like to check your balance, see where your money went, or review recurring payments?"
+            elif social in {"i hate you", "this is frustrating", "i'm frustrated", "im frustrated", "you're not helping", "you are not helping", "this is annoying"}:
+                reply = "That sounds frustrating. Let's take it one step at a time. Tell me what you wanted to do, and I'll help you work through it."
             if reply is not None:
                 return ConversationTurn(result=AgentResult(reply=reply), state=original)
+            if original.pending_tool_requests and _draft_answer(chat.message)[2]:
+                return ConversationTurn(result=AgentResult(reply="That request already has an action card. I can't change it here. Cancel its approval in the app, then send a new request with the correct details."), state=original)
         progress = _Progress(original)
         progress.stage = "request_processing"
         result = _process(chat, tool_catalog, tool_results or [], progress)
@@ -277,12 +356,20 @@ def _process(chat, catalog, results, progress):
             report = SubscriptionReport.model_validate(data)
             return accept(_subscription_reply(report))
         execution = ExecutionResult.model_validate(data)
+        action = "transfer" if tool == "request_transfer" else "subscription cancellation"
         if execution.status.value == "COMPLETED":
-            return accept(f"The backend confirmed completion. Action ID: {execution.action_id}.")
+            return accept(f"✅ Your {action} is complete.")
+        outcomes = {
+            "PENDING_CONFIRMATION": f"Your {action} is ready for review. Please use the action card to confirm it. It hasn't been completed yet.",
+            "PENDING_MFA": f"One more step: verify your identity using the code requested in the app to finish your {action}. It hasn't been completed yet.",
+            "CANCELLED": f"Your {action} request has been cancelled. It won't go ahead.",
+            "REJECTED": f"Your {action} wasn't approved and hasn't been completed. Please review the action details.",
+            "FAILED": f"I couldn't confirm that your {action} completed. Please check its status before trying again.",
+        }
         # Nonterminal execution outcomes must remain pending for a later update.
         if execution.status.value in {"REJECTED", "FAILED", "CANCELLED"}:
-            return accept(f"Backend action status: {execution.status.value}. Completion is not confirmed.")
-        return AgentResult(reply=f"Backend action status: {execution.status.value}. Completion is not confirmed.")
+            return accept(outcomes[execution.status.value])
+        return AgentResult(reply=outcomes[execution.status.value])
 
     # Context is supplied by the backend, never inferred from fixture/global state.
     progress.stage = "clarification_processing"
@@ -304,46 +391,61 @@ def _process(chat, catalog, results, progress):
     continuing_cancellation = cancellation is not None
     continuing_spending = spending is not None
     continuing = pending is not None and progress.state.awaiting is not None
+    answer, corrected_field, correction = _draft_answer(chat.message)
     if continuing_cancellation:
         if previous:
             raise ValueError("Do not mix structured state with legacy replay")
-        extracted = Intent(intent="cancel", subscription=chat.message.strip())
+        if corrected_field not in {None, 'subscription'}:
+            return clarify("Which subscription would you like to cancel? Please enter its full name.")
+        extracted = Intent(intent="cancel", subscription=answer if correction else chat.message.strip())
+        message = extracted.subscription
     elif continuing_spending:
         if previous:
             raise ValueError("Do not mix structured state with legacy replay")
-        import re
-        from datetime import date
-        period = chat.message.strip()
-        try:
-            if not re.fullmatch(r"[0-9]{4}-(0[1-9]|1[0-2])", period):
-                raise ValueError("Invalid month format")
-            date(int(period[:4]), int(period[5:]), 1)
-        except ValueError:
-            return clarify("Please enter a valid month using YYYY-MM, for example 2026-11.")
-        extracted = Intent(intent="spending", period=period)
+        if corrected_field not in {None, 'month', 'year'}:
+            return clarify("Please tell me the month or year you'd like to check.")
+        message = answer if correction else chat.message
+        extracted = Intent(intent="spending")
     elif continuing:
         if previous:
             raise ValueError("Do not mix structured state with legacy replay")
         if not is_direct_request(pending.original_message, "transfer"):
             raise ValueError("Pending request is not an explicit transfer")
-        if progress.state.awaiting == "amount":
-            import re
-            if not re.fullmatch(r"[+-]?\d+(?:\.\d+)?", chat.message.strip()):
+        import re
+        target = progress.state.awaiting
+        if correction:
+            if corrected_field not in {None, 'amount', 'recipient'}:
+                return clarify("Would you like to change the transfer amount or recipient?")
+            target = corrected_field or ('amount' if re.match(r'^[+-]?\d', answer) else 'recipient')
+        else:
+            answer = chat.message.strip()
+        if target == "amount":
+            amount_match = re.fullmatch(r"([+-]?\d+(?:\.\d+)?)(?:\s+(?:CNY|yuan))?", answer, re.I)
+            if not amount_match:
+                if correction:
+                    draft = pending.model_copy(update={'amount': None})
+                    return _transfer_question(progress, draft, 'amount', "Please answer with a positive CNY amount using digits.")
                 return clarify("Please answer with a positive CNY amount using digits.")
             try:
-                accepted_amount = TypeAdapter(PositiveMoney).validate_python(chat.message.strip())
+                accepted_amount = TypeAdapter(PositiveMoney).validate_python(amount_match[1])
             except ValidationError:
+                if correction:
+                    draft = pending.model_copy(update={'amount': None})
+                    return _transfer_question(progress, draft, 'amount', "Please enter a CNY amount greater than zero with at most two decimal places.")
                 return clarify("Please enter a CNY amount greater than zero with at most two decimal places.")
             pending = PendingTransfer.model_validate({**pending.model_dump(), "amount": accepted_amount})
         else:
             transfer_context = entries.get("request_transfer", {}).get("context", {})
             choices = [Recipient.model_validate(r) for r in transfer_context.get("recipients", [])]
-            name = chat.message.strip().casefold()
+            name = answer.casefold()
             matches = [r for r in choices if name in (r.display_name.casefold(), r.display_name.split()[0].casefold())]
             if len(matches) != 1:
-                return clarify("Please specify the recipient's full name using the app's verified recipient list.")
+                if correction:
+                    draft = pending.model_copy(update={'recipient_text': answer, 'recipient_id': None})
+                    return _transfer_question(progress, draft, 'recipient', _recipient_question(answer, matches))
+                return clarify(_recipient_question(answer, matches))
             pending = PendingTransfer.model_validate({**pending.model_dump(),
-                "recipient_text": chat.message.strip(), "recipient_id": matches[0].recipient_id})
+                "recipient_text": answer, "recipient_id": matches[0].recipient_id})
         # Exact field answers are handled deterministically; no LLM is needed to
         # reinterpret the entire request or guess which details should be retained.
         amount_text = f"{pending.amount:.2f}" if pending.amount is not None else None
@@ -386,7 +488,11 @@ def _process(chat, catalog, results, progress):
     if extracted.intent == "cancel" and not is_direct_request(request_text, "cancel"):
         return clarify("Please explicitly request cancellation of a verified subscription.")
     if not tool:
-        return clarify("I'm not sure what you mean. I can help with balances, spending, subscriptions, transfers, or cancellations. Please ask for one step at a time.")
+        if extracted.user_mood == 'uncertain':
+            return clarify("No worries 🙂 We can take it one step at a time. Would you like to check your balance, review spending, or look at recurring payments?")
+        if extracted.user_mood == 'frustrated':
+            return clarify("That sounds frustrating. Let's take it one step at a time. What were you trying to do with your account?")
+        return clarify("I'm not quite sure what you'd like to do, but I'm here to help 🙂 You can ask about your balance, spending or subscriptions, or ask me to prepare a transfer. What would you like to try?")
     if tool not in entries:
         return AgentResult(reply="That tool is unavailable. No action was executed.")
     context = entries[tool].get("context", {})
@@ -403,12 +509,42 @@ def _process(chat, catalog, results, progress):
     if extracted.intent in ("transfer", "cancel") and context.get("account_locked", False):
         return AgentResult(reply="This account is locked. No state-changing proposal was created.")
     if extracted.intent == "spending":
-        if not extracted.period:
+        year, month, invalid = _spending_date(message, answer=continuing_spending)
+        if continuing_spending and corrected_field == 'year' and (year is None or month is not None):
+            invalid = True
+        if continuing_spending and corrected_field == 'month' and (month is None or year is not None):
+            invalid = True
+        if invalid:
+            if continuing_spending and correction:
+                changes = {}
+                if corrected_field == 'month' or month is not None:
+                    changes['month'] = None
+                if corrected_field == 'year' or year is not None:
+                    changes['year'] = None
+                if not changes:
+                    changes = {'year': None, 'month': None}
+                progress.state = ConversationState(conversation_id=chat.conversation_id,
+                    pending_spending=spending.model_copy(update=changes), awaiting='period',
+                    pending_tool_requests=progress.state.pending_tool_requests)
+            elif not continuing_spending:
+                progress.state = ConversationState(conversation_id=chat.conversation_id,
+                    pending_spending=PendingSpending(original_message=chat.message, account_id=args['account_id']),
+                    awaiting="period", pending_tool_requests=progress.state.pending_tool_requests)
+            return clarify("Please enter a valid month using YYYY-MM, for example 2026-11.")
+        if continuing_spending:
+            year = year if year is not None else spending.year
+            month = month if month is not None else spending.month
+        if year is None or month is None:
             progress.state = ConversationState(conversation_id=chat.conversation_id,
-                pending_spending=PendingSpending(original_message=chat.message, account_id=args['account_id']),
+                pending_spending=PendingSpending(original_message=spending.original_message if continuing_spending else chat.message,
+                    account_id=args['account_id'], year=year, month=month),
                 awaiting="period", pending_tool_requests=progress.state.pending_tool_requests)
+            if month is not None:
+                return clarify("Which year would you like me to check for that month?")
+            if year is not None:
+                return clarify(f"Which month in {year} would you like me to check?")
             return clarify("Which month? Please use YYYY-MM.")
-        args["period"] = extracted.period
+        args["period"] = f'{year:04d}-{month:02d}'
     if extracted.intent == "transfer":
         recipient_text = extracted.recipient
         if recipient_text and recipient_text.casefold() not in message.casefold():
@@ -440,7 +576,7 @@ def _process(chat, catalog, results, progress):
         matches = [r for r in recipients if name == r.display_name.casefold() or
                    name == r.display_name.split()[0].casefold()]
         if len(matches) != 1:
-            return _transfer_question(progress, draft, "recipient", "Please specify the recipient's full name using the app's verified recipient list.")
+            return _transfer_question(progress, draft, "recipient", _recipient_question(recipient_text, matches))
         if name not in message.casefold():
             raise ValueError("Ungrounded recipient")
         args.update(recipient_id=matches[0].recipient_id, amount=extracted.amount, currency="CNY")
@@ -484,7 +620,9 @@ def _process(chat, catalog, results, progress):
         args["amount"] = f"{validated.amount:.2f}"
     proposal = ActionProposal(proposal_id=str(uuid4()), tool=tool, arguments=args,
                               rationale="User requested this step; backend validation is required.")
-    reply = ("Request proposed. Backend approval and policy checks are required; nothing has been executed."
+    reply = (("💸 Your transfer is ready to review. Please check the details in the action card and confirm when you're ready; nothing has been executed."
+              if extracted.intent == "transfer" else
+              "Your subscription cancellation is ready to review. Please check the action card and confirm when you're ready; nothing has been executed.")
              if extracted.intent in ("transfer", "cancel") else
              "I have proposed a read-only lookup. A verified tool result is needed before reporting figures.")
     return AgentResult.model_validate(dict(reply=reply, proposals=[proposal]))

@@ -75,7 +75,7 @@ def test_interactive_abandonment_then_fresh_request(monkeypatch, capsys):
     answers(monkeypatch, ["Transfer to Alice", "500", "never mind", "Transfer 300 to Bob", "quit"])
     cli.main(["--interactive"])
     output = capsys.readouterr().out
-    assert "Unfinished request discarded." in output
+    assert "Noted, I've discarded your unfinished request." in output
     assert '"recipient_id": "recipient_bob"' in output
     assert '"amount": "300.00"' in output
     assert '"recipient_id": "recipient_alice"' not in output

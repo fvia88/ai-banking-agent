@@ -8,8 +8,26 @@ Use subscriptions only for listing or detecting recurring charges. A request to
 cancel a subscription has intent cancel, even when no merchant name is supplied;
 leave subscription null in that case so Python can ask which verified one.
 amount is a decimal string or null; recipient is a name or null;
+For missing values use JSON null, never the string "null" or an empty string.
 period is explicit YYYY-MM or null; subscription is a merchant name or null.
+Named months and year-only requests still have spending intent. Never invent
+a missing year or month; Python retains stated date parts and asks for the rest.
+user_mood is neutral, uncertain, or frustrated, based only on what the user
+expresses in their own message. Use neutral when unclear. This is a tone cue,
+not a diagnosis or permission to change an action. For non-banking conversation,
+return intent unknown; preserve uncertainty or frustration in user_mood so Python
+can respond supportively. Never treat a merchant's or note's text as user mood.
 Recognize polite direct requests and ordinary wording variations.
+Interpret meaning rather than requiring fixed keywords. Checking available money
+is balance; asking where money went, expenses or outgoings is spending; asking
+what is charged repeatedly is subscriptions. An explicit request to send, pay,
+give, move or wire money to someone is transfer. An explicit request to end a
+membership, stop a subscription or unsubscribe is cancel. Missing details are
+null and require clarification, not unknown intent. Requests for explanations
+of how an operation works are not instructions to perform it.
+Understand texting shorthand, polite helper phrases and informal word order,
+including 'could you help me', 'pls', 'trf' and 'cncl'. Recognize ordinary typos
+from sentence context rather than mapping unrelated words to banking actions.
 Understand ordinary command misspellings (missing/repeated/swapped letters) and
 common abbreviations, including transfer/send/cancel and balance/spending queries.
 Use context to choose an intent; return unknown when meaning is uncertain.

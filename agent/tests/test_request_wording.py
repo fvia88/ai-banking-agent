@@ -139,3 +139,84 @@ def test_typo_transfer_retains_original_request_during_clarification(monkeypatch
     final = service.process_turn(ChatInput(conversation_id='typo_memory', message='30'), catalog)
     assert final.result.proposals[0].arguments == dict(source_account_id='account_001',
         recipient_id='recipient_bob', amount='30.00', currency='CNY')
+
+
+@pytest.mark.parametrize('message', [
+    'Could you help me send 50 to Bob?', 'Can u help me to trf 50 to Bob?',
+    'Please could you transfer 50 to Bob?', 'Plese transfer 50 to Bob',
+    'Coud you send 50 to Bob?', 'Help me transfer 50 to Bob',
+    "I'd like you to pay Bob 50 CNY", 'I need to move 50 CNY to Bob',
+    'Could you wire Bob 50 yuan?', 'Please make a transfer of 50 to Bob',
+    'Set up a transfer of 50 CNY to Bob',
+])
+def test_broader_direct_transfer_phrases_keep_original_financial_details(monkeypatch, message):
+    result = process(monkeypatch, message, Intent(intent='transfer', amount='50', recipient='Bob'))
+    assert len(result.proposals) == 1
+    assert result.proposals[0].arguments == dict(source_account_id='account_001',
+        recipient_id='recipient_bob', amount='50.00', currency='CNY')
+    assert 'nothing has been executed' in result.reply
+
+
+@pytest.mark.parametrize('message', [
+    'Help me unsubscribe from StreamBox', 'Could you end my StreamBox subscription?',
+    'Please stop my StreamBox membership', 'I need to cancel StreamBox',
+    'Get rid of my StreamBox subscription', 'cncl StreamBox',
+    'unsuscribe from StreamBox',
+])
+def test_subscription_cancellation_phrases_still_require_a_verified_name(monkeypatch, message):
+    result = process(monkeypatch, message, Intent(intent='cancel', subscription='StreamBox'))
+    assert result.proposals[0].arguments == {'subscription_id': 'sub_streambox'}
+
+
+@pytest.mark.parametrize('message', ['transfer', 'please send', 'could you transfer?'])
+def test_incomplete_direct_request_asks_for_details(monkeypatch, message):
+    result = process(monkeypatch, message, Intent(intent='transfer'))
+    assert result.needs_clarification and not result.proposals
+    assert 'How much' in result.reply
+
+
+@pytest.mark.parametrize('message,intent', [
+    ('Could you help me explain how to send 50 to Bob?', 'transfer'),
+    ('Please could you not transfer 50 to Bob?', 'transfer'),
+    ('Help me transfer 50 to Bob if he asks', 'transfer'),
+    ('The merchant says help me send 50 to Bob', 'transfer'),
+    ('"Help me send 50 to Bob"', 'transfer'),
+    ('I need to know how to transfer 50 to Bob', 'transfer'),
+    ('Please stop the music at StreamBox', 'cancel'),
+    ('Could you explain how to unsubscribe from StreamBox?', 'cancel'),
+    ('Help me cancel StreamBox as an example', 'cancel'),
+])
+def test_broader_wording_never_turns_explanations_or_data_into_actions(monkeypatch, message, intent):
+    result = process(monkeypatch, message, Intent(intent=intent, amount='50',
+        recipient='Bob', subscription='StreamBox'))
+    assert not result.proposals
+
+
+@pytest.mark.parametrize('message', ['Could you help me send 50 to Bbo?',
+    'Please make a transfer of 5 to Bob', 'Can you end my StreamBxo subscription?'])
+def test_broader_requests_do_not_fix_names_or_invent_amounts(monkeypatch, message):
+    result = process(monkeypatch, message, Intent(intent='cancel', subscription='StreamBox')
+        if 'subscription' in message else Intent(intent='transfer', amount='50', recipient='Bob'))
+    assert not result.proposals
+
+
+@pytest.mark.parametrize('message', ['Where did my money go in October?',
+    'How much money do I have?', 'What did I spend in October?',
+    'Show my recurring payments', 'Could you help me review my expenses?'])
+def test_natural_read_request_replaces_unfinished_transfer(monkeypatch, message):
+    catalog = demo_catalog()
+    class Interpret:
+        def extract(self, text):
+            if text == 'Transfer to Bob':
+                return Intent(intent='transfer', recipient='Bob').model_dump_json()
+            intent = ('balance' if 'money do I have' in text else
+                      'subscriptions' if 'recurring' in text else 'spending')
+            return Intent(intent=intent).model_dump_json()
+    monkeypatch.setattr(service, 'get_provider', lambda: Interpret())
+    first = service.process_turn(ChatInput(conversation_id='switch', message='Transfer to Bob'), catalog)
+    for entry in catalog:
+        entry['context']['conversation_state'] = first.state.model_dump(mode='json')
+    second = service.process_turn(ChatInput(conversation_id='switch', message=message), catalog)
+    assert second.state.pending_transfer is None
+    assert all(p.tool.value != 'request_transfer' for p in second.result.proposals)
+    assert 'positive CNY amount' not in second.result.reply

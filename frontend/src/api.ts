@@ -83,9 +83,59 @@ export interface ChatOutput {
 }
 
 export interface ChatMessage {
+  id?: number;
+  created_at?: string;
+  event_key?: string | null;
   sender: 'user' | 'agent';
   text: string;
   actions?: ActionProposal[];
+}
+
+export interface ConversationSummary {
+  conversation_id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ConversationPage {
+  conversations: ConversationSummary[];
+  has_more: boolean;
+}
+
+export interface ConversationDetail {
+  conversation: ConversationSummary;
+  messages: ChatMessage[];
+  has_more: boolean;
+}
+
+// Only the selected ID goes in browser storage; message content stays on the server.
+export const CONVERSATION_STORAGE_KEY = `bankly.conversation.${DEMO_USER_ID}`;
+
+export async function fetchConversations(offset = 0): Promise<ConversationPage> {
+  const res = await fetch(`/api/v1/conversations?offset=${offset}`, {
+    headers: { 'X-Demo-User-Id': DEMO_USER_ID },
+  });
+  if (!res.ok) throw new Error('Could not load your conversations. Please retry.');
+  return res.json();
+}
+
+export async function createConversation(): Promise<ConversationSummary> {
+  const res = await fetch('/api/v1/conversations', {
+    method: 'POST', headers: { 'X-Demo-User-Id': DEMO_USER_ID },
+  });
+  if (!res.ok) throw new Error('Could not create a new chat. Please retry.');
+  return res.json();
+}
+
+export async function fetchConversation(id: string, beforeId?: number): Promise<ConversationDetail | null> {
+  const query = beforeId === undefined ? '' : `?before_id=${beforeId}`;
+  const res = await fetch(`/api/v1/conversations/${encodeURIComponent(id)}${query}`, {
+    headers: { 'X-Demo-User-Id': DEMO_USER_ID },
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error('Could not load this chat. Please retry.');
+  return res.json();
 }
 
 export async function sendChatMessage(

@@ -4,15 +4,17 @@
 import argparse
 from time import perf_counter
 from .gemini_provider import GeminiProvider
+from .groq_provider import GroqProvider
 from .provider import Intent, ProviderError
 from pydantic import ValidationError
 
 
-def main(message="What is my balance?", expected_intent="balance"):
-    print("Live Gemini diagnostic (one request, no bank operations)")
+def main(message="What is my balance?", expected_intent="balance", provider="gemini"):
+    label = 'Groq' if provider == 'groq' else 'Gemini'
+    print(f"Live {label} diagnostic (one request, no bank operations)")
     started = perf_counter()
     try:
-        payload = GeminiProvider().extract(message)
+        payload = (GroqProvider() if provider == 'groq' else GeminiProvider()).extract(message)
         intent = Intent.model_validate_json(payload)
         if intent.intent != expected_intent:
             print("RESULT: unexpected_intent")
@@ -39,6 +41,14 @@ def main(message="What is my balance?", expected_intent="balance"):
             "network_protocol_error": "The HTTP connection ended with a protocol error before generation completed.",
             "network_connection_error": "The HTTP client could not establish or maintain the connection.",
         }
+        if provider == 'groq':
+            hints.update({
+                'missing_key': 'Set GROQ_API_KEY in this terminal.',
+                'model_not_found': 'Check GROQ_MODEL and your Groq model permissions.',
+                'provider_unavailable': 'Groq is temporarily unavailable. Retry later.',
+                'quota_or_rate_limit': 'Check the Groq free-tier request/token limits; retry after the limit resets.',
+                'invalid_request': 'Check Groq model support for strict JSON schema and the request configuration.',
+            })
         print(hints.get(exc.category, "Provider response was unsuccessful."))
         return 1
     except ValidationError:
@@ -49,12 +59,13 @@ def main(message="What is my balance?", expected_intent="balance"):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="One live Gemini intent diagnostic; no banking operations")
+    parser = argparse.ArgumentParser(description="Live provider intent diagnostic; no banking operations")
+    parser.add_argument('--provider', choices=['gemini', 'groq'], default='gemini')
     parser.add_argument("--message", default="What is my balance?")
     parser.add_argument("--expected-intent", default="balance",
                         choices=["balance", "spending", "subscriptions", "transfer", "cancel", "unknown"])
     parser.add_argument("--repeat", type=int, choices=range(1, 6), default=1,
                         help="Run 1-5 sequential probes in one process to compare connection reuse")
     args = parser.parse_args()
-    codes = [main(args.message, args.expected_intent) for _ in range(args.repeat)]
+    codes = [main(args.message, args.expected_intent, args.provider) for _ in range(args.repeat)]
     raise SystemExit(max(codes))

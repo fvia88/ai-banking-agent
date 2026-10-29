@@ -1,7 +1,7 @@
 # backend/app/db/models.py
 from datetime import datetime, timezone
 from decimal import Decimal
-from sqlalchemy import Column, String, Boolean, Integer, Numeric, Date, DateTime, ForeignKey, Text
+from sqlalchemy import Column, String, Boolean, Integer, Numeric, Date, DateTime, ForeignKey, Text, ForeignKeyConstraint, UniqueConstraint, Index
 from app.services.daily_transfers import banking_day
 from sqlalchemy.orm import relationship
 from app.db.session import Base
@@ -105,3 +105,25 @@ class ConversationModel(Base):
     user_id = Column(String(64), primary_key=True)
     conversation_id = Column(String(128), primary_key=True)
     state_json = Column(Text, nullable=False)
+    title = Column(String(80), nullable=False, default="New chat", server_default="New chat")
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class ChatMessageModel(Base):
+    __tablename__ = "chat_messages"
+    __table_args__ = (
+        ForeignKeyConstraint(["user_id", "conversation_id"],
+                             ["agent_conversations.user_id", "agent_conversations.conversation_id"]),
+        UniqueConstraint("user_id", "conversation_id", "event_key", name="uq_chat_message_event"),
+        Index("ix_chat_messages_conversation", "user_id", "conversation_id", "message_id"),
+    )
+
+    message_id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String(64), nullable=False)
+    conversation_id = Column(String(128), nullable=False)
+    sender = Column(String(8), nullable=False)
+    text = Column(Text, nullable=False)
+    response_json = Column(Text, nullable=True)
+    event_key = Column(String(160), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))

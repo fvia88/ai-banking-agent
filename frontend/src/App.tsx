@@ -9,6 +9,11 @@ import { mergeApprovalState } from './approvalState';
 import { Icon } from './Icon';
 import banklyLogo from './assets/bankly.png';
 import './App.css';
+import { fetchConversations, fetchConversation, createConversation, CONVERSATION_STORAGE_KEY } from './api';
+import type { ConversationSummary, ConversationDetail } from './api';
+
+const greeting: ChatMessage = { sender: 'agent',
+  text: 'Hi Alice, I’m bank.ly (帮客力). I can help you understand your spending, check your balance, manage subscriptions, and prepare transfers.' };
 
 export default function App() {
   const [view, setView] = useState<'chat' | 'transactions' | 'subscriptions' | 'audit'>('chat');
@@ -26,12 +31,17 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
 
   // Chat state
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      sender: 'agent',
-      text: 'Hi Alice, I’m bank.ly (帮客力). I can help you understand your spending, check your balance, manage subscriptions, and prepare transfers.',
-    },
-  ]);
+  const [messages, setMessages] = useState<ChatMessage[]>([greeting]);
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const activeConversation = useRef<string | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [moreConversations, setMoreConversations] = useState(false);
+  const [moreMessages, setMoreMessages] = useState(false);
+  const [oldestMessageId, setOldestMessageId] = useState<number | undefined>();
+  const historyGeneration = useRef(0);
+  const skipScroll = useRef(false);
   const [inputMessage, setInputMessage] = useState<string>('');
   const [sending, setSending] = useState<boolean>(false);
   const deliveredUpdates = useRef(new Set<string>());
@@ -67,7 +77,128 @@ export default function App() {
 
   useEffect(() => {
     loadData();
+    void initializeHistory();
+    return () => { historyGeneration.current++; };
   }, []);
+
+  function selectHistory(detail: ConversationDetail) {
+    const id = detail.conversation.conversation_id;
+    activeConversation.current = id;
+    setConversationId(id);
+    try { localStorage.setItem(CONVERSATION_STORAGE_KEY, id); } catch { /* Storage may be disabled. */ }
+    setMessages([greeting, ...detail.messages]);
+    setInputMessage('');
+    setMoreMessages(detail.has_more);
+    setOldestMessageId(detail.messages[0]?.id);
+    deliveredUpdates.current = new Set(detail.messages.flatMap(m => m.event_key ? [m.event_key] : []));
+    const actions = detail.messages.flatMap(m => m.actions ?? []);
+    rememberApprovals(actions);
+    // Restore the simulated inbox through its existing read endpoint, never
+    // store OTPs in chat history and never confirm/continue on history load.
+    if (actions.some(a => a.approval.status === 'PENDING_MFA')) {
+      void fetchDemoInbox().then(inbox => {
+        if (activeConversation.current !== id) return;
+        setActionStates(prev => {
+          const next = { ...prev };
+          for (const action of actions) {
+            const key = action.approval.action_id;
+            next[key] = { ...next[key], inboxMessage: inbox.find(m => m.action_id === key)?.message };
+          }
+          return next;
+        });
+      }).catch(() => { /* Existing verification UI remains available. */ });
+    }
+  }
+
+  async function initializeHistory() {
+    const generation = ++historyGeneration.current;
+    setHistoryLoading(true);
+    setHistoryError(null);
+    try {
+      const page = await fetchConversations();
+      if (generation !== historyGeneration.current) return;
+      let saved: string | null = null;
+      try { saved = localStorage.getItem(CONVERSATION_STORAGE_KEY); } catch { /* Use latest chat. */ }
+      let detail = saved ? await fetchConversation(saved) : null;
+      if (generation !== historyGeneration.current) return;
+      if (!detail && page.conversations.length) detail = await fetchConversation(page.conversations[0].conversation_id);
+      if (generation !== historyGeneration.current) return;
+      if (!detail) {
+        const created = await createConversation();
+        if (generation !== historyGeneration.current) return;
+        page.conversations.unshift(created);
+        detail = { conversation: created, messages: [], has_more: false };
+      }
+      setConversations(page.conversations);
+      setMoreConversations(page.has_more);
+      selectHistory(detail);
+    } catch (err) {
+      if (generation === historyGeneration.current) setHistoryError(err instanceof Error ? err.message : 'Could not load chat history.');
+    } finally {
+      if (generation === historyGeneration.current) setHistoryLoading(false);
+    }
+  }
+
+  async function refreshConversations() {
+    try {
+      const page = await fetchConversations();
+      setConversations(page.conversations);
+      setMoreConversations(page.has_more);
+    } catch {
+      setHistoryError('Your chat was received, but the history list could not refresh. Please retry.');
+    }
+  }
+
+  async function openChat(id?: string) {
+    if (sending || historyLoading || inFlightActions.current.size) return;
+    const generation = ++historyGeneration.current;
+    setHistoryLoading(true);
+    setHistoryError(null);
+    try {
+      const detail = id ? await fetchConversation(id) : {
+        conversation: await createConversation(), messages: [], has_more: false,
+      };
+      if (generation !== historyGeneration.current) return;
+      if (!detail) throw new Error('This conversation is no longer available.');
+      selectHistory(detail);
+      navigate('chat');
+      await refreshConversations();
+    } catch (err) {
+      setHistoryError(err instanceof Error ? err.message : 'Could not open chat.');
+    } finally {
+      if (generation === historyGeneration.current) setHistoryLoading(false);
+    }
+  }
+
+  async function loadOlderMessages() {
+    if (!conversationId || oldestMessageId === undefined || historyLoading || sending) return;
+    const id = conversationId;
+    setHistoryLoading(true);
+    try {
+      const page = await fetchConversation(id, oldestMessageId);
+      if (!page || activeConversation.current !== id) return;
+      skipScroll.current = true;
+      setMessages(prev => [greeting, ...page.messages, ...prev.slice(1)]);
+      setMoreMessages(page.has_more);
+      setOldestMessageId(page.messages[0]?.id);
+      rememberApprovals(page.messages.flatMap(m => m.actions ?? []));
+      for (const message of page.messages) if (message.event_key) deliveredUpdates.current.add(message.event_key);
+    } catch (err) {
+      setHistoryError(err instanceof Error ? err.message : 'Could not load older messages.');
+    } finally { setHistoryLoading(false); }
+  }
+
+  async function loadMoreConversations() {
+    if (historyLoading || sending) return;
+    setHistoryLoading(true);
+    try {
+      const page = await fetchConversations(conversations.length);
+      setConversations(prev => [...prev, ...page.conversations.filter(c => !prev.some(p => p.conversation_id === c.conversation_id))]);
+      setMoreConversations(page.has_more);
+    } catch (err) {
+      setHistoryError(err instanceof Error ? err.message : 'Could not load older chats.');
+    } finally { setHistoryLoading(false); }
+  }
 
   function rememberApprovals(actions: ActionProposal[]) {
     if (!actions.length) return;
@@ -81,7 +212,8 @@ export default function App() {
   }
 
   async function handleSend() {
-    if (!inputMessage.trim() || sending) return;
+    if (!inputMessage.trim() || sending || historyLoading || !activeConversation.current) return;
+    const selectedId = activeConversation.current;
 
     const userText = inputMessage.trim();
     setInputMessage('');
@@ -91,7 +223,8 @@ export default function App() {
     setSending(true);
 
     try {
-      const response = await sendChatMessage(userText);
+      const response = await sendChatMessage(userText, selectedId);
+      if (activeConversation.current !== selectedId) return;
       rememberApprovals(response.actions);
       
       // Append AI response with any proposed actions
@@ -103,6 +236,7 @@ export default function App() {
           actions: response.actions,
         },
       ]);
+      await refreshConversations();
     } catch (err: unknown) {
       setMessages((prev) => [
         ...prev,
@@ -141,6 +275,7 @@ export default function App() {
       setContinuationErrors(prev => {
         const next = { ...prev }; delete next[actionId]; return next;
       });
+      await refreshConversations();
     } catch {
       // The bank transaction already has its own committed outcome. A failed
       // agent notification must never turn a successful transfer into "failed".
@@ -151,7 +286,7 @@ export default function App() {
   }
 
   async function runAction(actionId: string, operation: () => Promise<void>) {
-    if (inFlightActions.current.has(actionId)) return;
+    if (historyLoading || inFlightActions.current.has(actionId)) return;
     inFlightActions.current.add(actionId);
     setBusyActions(prev => ({ ...prev, [actionId]: true }));
     try {
@@ -246,6 +381,7 @@ export default function App() {
   }
 
   useEffect(() => {
+    if (skipScroll.current) { skipScroll.current = false; return; }
     if (view === 'chat') messageEnd.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages, sending, view]);
 
@@ -291,6 +427,15 @@ export default function App() {
             <Icon name={item.icon} /><span>{item.label}</span>{item.id === 'chat' && <span className="nav-tag">AI</span>}
           </button>)}
         </nav>
+        <button className="new-chat-button" disabled={historyLoading || sending || Object.values(busyActions).some(Boolean)} onClick={() => void openChat()}>＋ New chat</button>
+        <section className="chat-history" aria-label="Saved conversations">
+          <div className="workspace-label">CHAT HISTORY</div>
+          {conversations.map(chat => <button key={chat.conversation_id} className={`history-item ${conversationId === chat.conversation_id ? 'is-active' : ''}`}
+            aria-current={conversationId === chat.conversation_id ? 'true' : undefined}
+            disabled={historyLoading || sending || Object.values(busyActions).some(Boolean)}
+            title={chat.title} onClick={() => void openChat(chat.conversation_id)}><Icon name="chat" /><span>{chat.title}</span></button>)}
+          {moreConversations && <button className="text-button history-more" disabled={historyLoading || sending} onClick={() => void loadMoreConversations()}>More conversations</button>}
+        </section>
         <div className="sidebar-balance">
           <div className="balance-label"><Icon name="wallet" /><span>Your accounts</span><button className="icon-button" onClick={loadData} disabled={loading} aria-label="Refresh balances and banking data"><Icon name="refresh" className={loading ? 'is-spinning' : ''} width="15" height="15" /></button></div>
           {accounts.map(account => <div className="sidebar-account" key={account.account_id}>
@@ -311,11 +456,14 @@ export default function App() {
         </header>
 
         {error && <div className="app-notice notice-error" role="alert"><span>{error}</span><button onClick={loadData} className="text-button">Try again</button></div>}
+        {historyError && <div className="app-notice notice-error" role="alert"><span>{historyError}</span><button disabled={sending || historyLoading || Object.values(busyActions).some(Boolean)} onClick={() => void initializeHistory()} className="text-button">Retry history</button></div>}
         {locked && <div className="app-notice notice-warning" role="alert"><Icon name="lock" /><span>Transfers and subscription cancellations are locked. Read-only queries remain available. A demo operator must review and reset an automatic safety lock before new actions can proceed.</span></div>}
 
         <section className="chat-view" hidden={view !== 'chat'} aria-label="Conversation with bank.ly">
           <div className="chat-scroll" role="log" aria-label="Chat messages" aria-live="polite" aria-relevant="additions">
             <div className="conversation-content">
+              {historyLoading && <p className="history-loading" role="status">Loading conversation…</p>}
+              {moreMessages && <button className="text-button history-more" disabled={historyLoading || sending} onClick={() => void loadOlderMessages()}>Load older messages</button>}
               {messages.length === 1 ? <div className="welcome">
                 <img className="welcome-logo" src={banklyLogo} alt="bank.ly 帮客力" />
                 <span className="eyebrow">A LITTLE CLARITY FOR YOUR MONEY</span>
@@ -329,7 +477,7 @@ export default function App() {
                     { icon: 'arrow', label: 'Prepare a transfer', detail: 'You review before anything moves', prompt: 'Transfer to Bob' },
                   ].map(item => <button className="suggestion" key={item.label} onClick={() => draftMessage(item.prompt)}><Icon name={item.icon as 'wallet' | 'activity' | 'repeat' | 'arrow'} /><strong>{item.label}</strong><span>{item.detail}</span></button>)}
                 </div>
-              </div> : messages.map((message, index) => <article key={index} className={`message message-${message.sender}`}>
+              </div> : messages.map((message, index) => <article key={message.id ?? `local-${index}`} className={`message message-${message.sender}`}>
                 {message.sender === 'agent' && <div className="assistant-avatar" aria-hidden="true"><img src={banklyLogo} alt="" /></div>}
                 <div className="message-body">
                   {message.sender === 'agent' && <div className="message-author">bank.ly <span lang="zh">帮客力</span></div>}
@@ -337,7 +485,7 @@ export default function App() {
                   {message.actions?.map(action => <ApprovalCard key={action.approval.action_id} action={action}
                     state={actionStates[action.approval.action_id]}
                     continuationError={continuationErrors[action.approval.action_id]}
-                    busy={busyActions[action.approval.action_id]}
+                    busy={historyLoading || busyActions[action.approval.action_id]}
                     onConfirm={(id, digest) => runAction(id, () => handleConfirm(id, digest))}
                     onCancel={(id, digest) => runAction(id, () => handleCancel(id, digest))}
                     onVerify={(id, code) => runAction(id, () => handleVerify(id, code))}
@@ -355,10 +503,10 @@ export default function App() {
           <div className="composer-area">
             <form className="composer" onSubmit={event => { event.preventDefault(); void handleSend(); }}>
               <label className="sr-only" htmlFor="bankly-message">Message bank.ly</label>
-              <textarea ref={composer} id="bankly-message" rows={2} value={inputMessage} placeholder="Ask bank.ly anything about your money…"
+              <textarea ref={composer} id="bankly-message" rows={2} value={inputMessage} disabled={historyLoading || !conversationId} placeholder="Ask bank.ly anything about your money…"
                 onChange={event => setInputMessage(event.target.value)}
                 onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void handleSend(); } }} />
-              <div className="composer-toolbar"><span><Icon name="shield" width="14" height="14" />Financial actions need your approval</span><button className="send-button" type="submit" disabled={sending || !inputMessage.trim()} aria-label="Send message"><Icon name="send" /></button></div>
+              <div className="composer-toolbar"><span><Icon name="shield" width="14" height="14" />Financial actions need your approval</span><button className="send-button" type="submit" disabled={sending || historyLoading || !conversationId || !inputMessage.trim()} aria-label="Send message"><Icon name="send" /></button></div>
             </form>
             <p className="composer-note">bank.ly can make mistakes. Review details before approving. <span>Synthetic banking demo.</span></p>
           </div>

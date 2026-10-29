@@ -11,6 +11,7 @@ class Intent(BaseModel):
     recipient: str | None = None
     period: str | None = None
     subscription: str | None = None
+    user_mood: Literal["neutral", "uncertain", "frustrated"] = "neutral"
 
 
 class ProviderError(Exception):
@@ -34,4 +35,7 @@ def get_provider() -> Provider:
     if name == "gemini":
         from .gemini_provider import GeminiProvider
         return GeminiProvider()
+    if name == "groq":
+        from .groq_provider import GroqProvider
+        return GroqProvider()
     raise ProviderError("Unsupported provider")

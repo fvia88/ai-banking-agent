@@ -2,7 +2,14 @@
 import re
 from decimal import Decimal
 
-_REQUEST_PREFIX = r"(?:(?:please|pls|plz|(?:can|could|cld|would|will) (?:you|u)(?: please| pls| plz)?|i (?:want to|would like to|wanna)|i'd like to)\s+)?"
+_POLITE = r"(?:please|pls|plz)"
+_REQUEST_PREFIX = (
+    rf"(?:{_POLITE}\s+)?"
+    rf"(?:(?:(?:can|could|cld|cud|would|will) (?:you|u)(?: {_POLITE})?"
+    r"(?: help me(?: to)?)?|help me(?: to)?|"
+    r"i (?:want to|would like to|wanna|need to|want you to|need you to|would like you to)|"
+    r"i'd like (?:to|you to))\s+)?"
+)
 
 
 def _one_typo(word: str, target: str) -> bool:
@@ -24,15 +31,23 @@ def _one_typo(word: str, target: str) -> bool:
 def _request_text(message: str) -> str:
     """Normalize command positions only, for guards; never rewrite field data."""
     text = " ".join(message.strip().casefold().replace("’", "'").split())
+    # Correct only the opening request word. Never normalize the whole message:
+    # a recipient or merchant may legitimately resemble an English command.
+    opening = re.match(r'^[a-z]+\b', text)
+    if opening and len(opening[0]) >= 4:
+        polite = [word for word in ('please', 'could', 'would') if _one_typo(opening[0], word)]
+        if len(polite) == 1:
+            text = polite[0] + text[opening.end():]
     match = re.match(r"^" + _REQUEST_PREFIX + r"(?P<verb>[a-z]+)(?=\s|$)", text)
     if not match:
         return text
     word = match['verb']
-    aliases = {'trf': 'transfer', 'xfer': 'transfer', 'snd': 'send', 'sned': 'send'}
+    aliases = {'trf': 'transfer', 'xfer': 'transfer', 'snd': 'send', 'sned': 'send',
+               'cncl': 'cancel'}
     canonical = aliases.get(word)
     if canonical is None and len(word) >= 4:
         matches = {('analyze' if v == 'analyse' else v) for v in
-                   ('transfer', 'cancel', 'analyze', 'analyse') if _one_typo(word, v)}
+                   ('transfer', 'cancel', 'unsubscribe', 'analyze', 'analyse') if _one_typo(word, v)}
         if len(matches) == 1:
             canonical = matches.pop()
     if canonical:
@@ -51,8 +66,24 @@ def _request_text(message: str) -> str:
 
 def is_abandonment(message: str) -> bool:
     """A standalone draft-abandonment command, never an action revocation."""
-    text = " ".join(message.strip().casefold().split()).rstrip('.!?').strip()
+    text = " ".join(message.strip().casefold().replace('’', "'").split()).rstrip('.!?').strip()
     if text in {'nvm', 'nvr mind', 'nvrmind'}:
+        return True
+    # Whole utterances only: 'stop my subscription' and 'no, send 50 to Bob'
+    # must not be mistaken for abandoning the current draft.
+    withdrawal = (
+        r"(?:no|nah|nope)(?: thanks| thank you)?"
+        r"|stop(?: here| now| this| that| it| this request| the request| my request)?"
+        r"|(?:cancel|discard|drop) (?:it|this|that|this request|the request|my request)"
+        r"|forget (?:it|this|that|about it|about that|this request)"
+        r"|(?:i )?(?:don't|dont|do not) want(?:(?: (?:it|this|that)(?: anymore)?)|(?: to(?: continue| proceed| do (?:it|this|that))?(?: anymore)?)| anymore)?"
+        r"|(?:don't|dont|do not) bother"
+        r"|(?:scrap|leave) (?:it|this|that)"
+        r"|i(?:'ve| have)? changed my mind"
+        r"|let's stop(?: here)?"
+    )
+    if re.fullmatch(r'(?:(?:please|pls|plz) )?(?:(?:no|nah|nope),? )?(?:' + withdrawal
+                    + r')(?:,? (?:please|pls|plz|thanks|thank you))?', text):
         return True
     words = text.split()
     return ((len(words) == 2 and words[0] == 'never' and _one_typo(words[1], 'mind'))
@@ -66,7 +97,7 @@ def is_generic_cancellation_request(message: str) -> bool:
     permission, or proposes cancelling all records.
     """
     text = _request_text(message).rstrip('.!?').strip()
-    match = re.fullmatch(_REQUEST_PREFIX + r"cancel (?:(?:my|the|a) )?(?P<noun>[a-z]+)", text)
+    match = re.fullmatch(_REQUEST_PREFIX + r"(?:cancel|end|stop|terminate|discontinue) (?:(?:my|the|a) )?(?P<noun>[a-z]+)", text)
     return bool(match and is_direct_request(message, 'cancel')
                 and any(_one_typo(match['noun'], noun) for noun in ('subscription', 'subscriptions')))
 
@@ -87,7 +118,13 @@ def is_new_banking_request(message: str) -> bool:
     prefix = _REQUEST_PREFIX
     reads = (r"(?:(?:what is|what's|whats|show|check|get|tell me) (?:me )?(?:my |the )?balance"
              r"|(?:analyze|analyse) (?:my |the )?spending"
-             r"|(?:list|show|get) (?:me )?(?:my |the )?subscriptions)\b")
+             r"|(?:list|show|get) (?:me )?(?:my |the )?subscriptions"
+             r"|how much (?:money |cash )?do i have"
+             r"|how much (?:did i|have i) (?:spend|spent)"
+             r"|what (?:did i|have i) (?:spend|spent)"
+             r"|where (?:did|has) my money (?:go|gone)"
+             r"|(?:show|check|review|break down|summarize|summarise) (?:my |the )?(?:spending|expenses|recurring (?:charges|payments))"
+             r"|what (?:subscriptions|recurring (?:charges|payments)) do i have)\b")
     return re.match(r"^" + prefix + reads, text) is not None
 
 
@@ -104,8 +141,14 @@ def is_direct_request(message: str, intent: str) -> bool:
     # Gemini still chooses intent and extracts all fields. This only accepts
     # direct imperative framing with common polite request prefixes.
     prefix = _REQUEST_PREFIX
-    verbs = r"(?:transfer|send|pay|give)" if intent == "transfer" else r"cancel"
-    return re.match(r"^" + prefix + verbs + r"\b\s+\S", text) is not None
+    if intent == "transfer":
+        verbs = r"(?:transfer|send|pay|give|move|wire|remit|make a transfer(?: of)?|set up a transfer(?: of)?)"
+    else:
+        verbs = r"(?:cancel|unsubscribe(?: from)?|(?:stop|end|terminate|discontinue|get rid of)(?=\s+.*\b(?:subscriptions?|memberships?|renewals?)\b))"
+    if re.match(r"^" + prefix + verbs + r"\b\s+\S", text):
+        return True
+    # A clear but incomplete request starts clarification, not execution.
+    return re.fullmatch(r"^" + prefix + (r"(?:transfer|send)" if intent == "transfer" else r"(?:cancel|unsubscribe)") + r"[.!?]?", text) is not None
 
 
 def stated_word_amounts(message: str) -> list[Decimal]:
