@@ -2,12 +2,7 @@ PS C:\Users\claine\Downloads\ai-banking-agent> (Set-ExecutionPolicy -Scope Proce
 (.venv) PS C:\Users\claine\Downloads\ai-banking-agent> $env:PYTHONDONTWRITEBYTECODE = '1'
 (.venv) PS C:\Users\claine\Downloads\ai-banking-agent> agent/.venv/Scripts/python.exe -m pytest -p no:cacheprovider tests/test_contracts.py agent/tests -q
 .........................................                         [100%]
-=========================== warnings summary ===========================
-agent\.venv\Lib\site-packages\google\genai\types.py:9562
-  C:\Users\claine\Downloads\ai-banking-agent\agent\.venv\Lib\site-packages\google\genai\types.py:9562: PydanticDeprecatedSince212: Using `@model_validator` with mode='after' on a classmethod is deprecated. Instead, usean instance method. See the documentation at https://docs.pydantic.dev/2.12/concepts/validators/#model-after-validator. Deprecated in Pydantic V2.12 to be removed in V3.0.
-    @model_validator(mode='after')  # type: ignore[arg-type]
-
--- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+[Historical SDK warning omitted after provider retirement.]
 41 passed, 1 warning in 3.69s
 (.venv) PS C:\Users\claine\Downloads\ai-banking-agent> agent/.venv/Scripts/python.exe -m agent.cli 'What is my balance?' --resolve-read
 SYNTHETIC DEMO | provider=mock

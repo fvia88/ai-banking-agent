@@ -1,5 +1,11 @@
 # P1 / P2 integration compatibility review
 
+> Maintenance note (30 October 2026): live commands now target Groq. Earlier
+> observations describe the provider used at that milestone and are not Groq
+> benchmark evidence. See README.md for current setup and technical_documentation.md
+> for current capabilities; the historical limitations below may be superseded.
+
+
 Reviewed: 2026-10-19 (Asia/Shanghai). Local checkout:
 `7d35328216fbc201bccdbe93692e940acf2b897c`.
 
@@ -40,7 +46,7 @@ Sources: `contracts/tool_schemas.py`, `backend/app/mocks/agent.py`,
 
 | Priority | Finding in current code | Required change / decision | Owner |
 | --- | --- | --- | --- |
-| First | `AgentAdapterService.process` always calls `MockAgentAdapter`; `use_mock` has no effect. | Add an explicit P1 path, preserving a deliberate stub mode. Switching the provider to Gemini is separate from switching this backend adapter. | P2 |
+| First | `AgentAdapterService.process` always calls `MockAgentAdapter`; `use_mock` has no effect. | Add an explicit P1 path, preserving a deliberate stub mode. Switching the provider to the live provider is separate from switching this backend adapter. | P2 |
 | First | `/chat` passes only `ChatInput`; no catalog/state reaches P1. | Build trusted tool catalog/context from the resolved user before calling P1. | P2, with P1 checking format |
 | First | No conversation state persistence/ownership binding exists in this chat path. | Load/save the latest state per user + conversation. For a local trial, in-memory storage is acceptable; define process-restart limits. Serialize state updates to avoid stale snapshots. | P2 |
 | First | `process_message` returns only `AgentResult`; memory state is available through P1's additional `process_turn` helper. | Agree to use `process_turn` inside the backend adapter, or an equivalent wrapper. Do not change the frozen public function signature. | P1 + P2 |
@@ -181,8 +187,8 @@ also verify action-ID correlation and prevent duplicate concurrent execution.
   subscription detection or execution. Clarification context needs verified
   `Subscription` records; detector candidates are a different DTO and are not
   proof of active subscriptions. Agree on the trusted source with P5.
-- **P1:** Gemini is selected by `AGENT_PROVIDER=gemini`, with `GEMINI_API_KEY`
-  and optional `GEMINI_MODEL` (default `gemini-3.1-flash-lite`). Mock provider is
+- **P1:** The current live provider is selected by `AGENT_PROVIDER=groq`, with `GROQ_API_KEY`
+  and optional `GROQ_MODEL` (default `openai/gpt-oss-20b`). Mock provider is
   default. Settings reading `.env` does not itself populate `os.environ` for P1.
 
 P1 limitations: exact numeric/name transfer follow-ups, YYYY-MM spending answers,
@@ -208,7 +214,7 @@ as P1 scope items rather than asking P2 to implement language understanding.
 5. **Mutation dispatch:** preserve selected source/recipient IDs; validate with
    shared schemas; keep metadata separate; obtain confirmation/MFA as required;
    return correlated execution results. Test cancellation never calls transfer.
-6. **Gemini smoke checks:** after the same flow passes offline, switch provider
+6. **Live-provider smoke checks:** after the same flow passes offline, switch provider
    and repeat a few wording examples without changing backend orchestration.
 
 Before treating mutations as integration-complete, additionally verify account
@@ -228,7 +234,7 @@ not reasons to delay the first read-only integration slice.
 - This pass's synthetic direct probes confirmed: selected transfer source
   overwritten, metadata-enriched arguments rejected by shared validation, Green
   reads recorded as PENDING_CONFIRMATION, and non-transfer payload mutation after
-  digest computation. No banking actions or live Gemini requests were executed.
+  digest computation. No banking actions or live the live provider requests were executed.
 - Executor dispatch gaps, missing state/callback wiring and execution rechecks
   are source-code findings. This is not an exhaustive concurrency/security audit.
 - Passing module tests do not prove P1/P2 end-to-end compatibility. Repeat the

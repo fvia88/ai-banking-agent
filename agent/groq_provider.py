@@ -1,4 +1,4 @@
-"""Optional Groq intent extraction; no tools, execution or Gemini fallback."""
+"""Live Groq intent extraction; no tool execution or provider fallback."""
 import os
 from threading import local
 

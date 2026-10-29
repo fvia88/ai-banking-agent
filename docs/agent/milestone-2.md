@@ -1,5 +1,11 @@
 # Milestone two standalone agent verification
 
+> Maintenance note (30 October 2026): live commands now target Groq. Earlier
+> observations describe the provider used at that milestone and are not Groq
+> benchmark evidence. See README.md for current setup and technical_documentation.md
+> for current capabilities; the historical limitations below may be superseded.
+
+
 Completed on 17 October 2026 for the bounded single-request scope below.
 No teammate implementation is imported. Frozen contracts and fixtures remain
 unchanged. Banking tools are synthetic; transfer/cancellation outputs are
@@ -10,7 +16,7 @@ proposals only. This is not completion of the full hackathon product.
 | Area | Evidence |
 | --- | --- |
 | Five basic intents | Balance, spending, listing subscriptions, transfer, and cancellation proposals passed live checks across separate runs |
-| Clarification | User-provided Gemini transcripts show ambiguous Alice, missing amount/recipient/month/subscription asking for details without proposals |
+| Clarification | User-provided historical provider transcripts show ambiguous Alice, missing amount/recipient/month/subscription asking for details without proposals |
 | Invalid amounts | Explicit correction for zero/negative values; no proposal; offline regression coverage |
 | Unsupported cancellation | User-provided live CloudMusic transcript rejected unsupported cancellation |
 | Account context | Offline stub tests cover absent/multiple accounts, transfer/cancellation on locked accounts, and permitted read queries |
@@ -23,14 +29,14 @@ proposals only. This is not completion of the full hackathon product.
 | Non-request framing | Offline tests deliberately inject mutation interpretations for negations, quotes, note data, and hypotheticals; no mutation proposal |
 | Provider failure | Safe categories distinguish unavailable service, region rejection, quota, and several transport failures; errors never silently switch to mock |
 
-Live calls used gemini-3.1-flash-lite. Cancellation and alternative spending
+Historical live calls used the retired provider, not the current Groq model. Cancellation and alternative spending
 first encountered 503 and passed on isolated retry. These are observations
 across separate requests, not evidence of uninterrupted service reliability.
 No automatic retries or paid fallback were introduced.
 
 ## Code changes in this closing step
 
-- Gemini default changed to gemini-3.1-flash-lite; environment overrides remain.
+- The historical provider default was updated; that adapter has since been removed.
 - Response text is assembled from visible candidate parts, excluding thought
   parts and metadata rather than repeatedly accessing response.text.
 - Regression tests cover visible-text parsing, empty candidates, and service
@@ -45,12 +51,12 @@ $env:PYTHONDONTWRITEBYTECODE = '1'
 agent/.venv/Scripts/python.exe -m pytest -p no:cacheprovider tests/test_contracts.py agent/tests -q
 
 # Explicit live calls; saved key must be available in this process.
-$env:GEMINI_MODEL = 'gemini-3.1-flash-lite'
-agent/.venv/Scripts/python.exe -m agent.cli 'whats my balnce?' --provider gemini
-agent/.venv/Scripts/python.exe -m agent.cli 'Could you send 500 yuan to Bob?' --provider gemini
-agent/.venv/Scripts/python.exe -m agent.cli 'Could you cancel StreamBox?' --provider gemini
-agent/.venv/Scripts/python.exe -m agent.cli 'How much did I spend in 2026-10?' --provider gemini --resolve-read
-agent/.venv/Scripts/python.exe -m agent.cli 'Show my recurring charges' --provider gemini
+$env:GROQ_MODEL = 'openai/gpt-oss-20b'
+agent/.venv/Scripts/python.exe -m agent.cli 'whats my balnce?' --provider groq
+agent/.venv/Scripts/python.exe -m agent.cli 'Could you send 500 yuan to Bob?' --provider groq
+agent/.venv/Scripts/python.exe -m agent.cli 'Could you cancel StreamBox?' --provider groq
+agent/.venv/Scripts/python.exe -m agent.cli 'How much did I spend in 2026-10?' --provider groq --resolve-read
+agent/.venv/Scripts/python.exe -m agent.cli 'Show my recurring charges' --provider groq
 ```
 
 The pytest command is offline. Live commands consume API quota and can fail
@@ -63,7 +69,7 @@ agent/.venv/Scripts/python.exe -m agent.diagnose --message 'Could you cancel Str
 
 ## Limits and milestone three handoff
 
-- Request framing is conservative English pattern matching around Gemini
+- Request framing is conservative English pattern matching around the live provider
   interpretation, not comprehensive semantic safety. Some legitimate phrases
   still ask for rephrasing. No claim of universal typo/language support.
 - Transfer amounts must appear numerically in the request. Written-out numbers
@@ -78,7 +84,7 @@ agent/.venv/Scripts/python.exe -m agent.diagnose --message 'Could you cancel Str
 - No DAG, dependent cancellation-to-transfer workflow, actual policy engine,
   subscription detector, or execution is implemented here.
 - Offline tests using recorded interpretations verify Python behavior, not
-  Gemini language accuracy. Live results above provide the separate evidence.
+  live-model language accuracy. Live results above provide the separate evidence.
 
 Next: the local stub-backend conversation harness, with state outside the
 stateless service and no dependency on unfinished teammate implementations.

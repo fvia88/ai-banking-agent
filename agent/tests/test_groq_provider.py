@@ -99,13 +99,14 @@ def test_empty_and_truncated_output_is_rejected(monkeypatch, payload, finish, ca
     assert caught.value.category == category
 
 
-@pytest.mark.parametrize('change,recreated', [('none', False), ('model', False), ('key', True), ('timeout', True)])
+@pytest.mark.parametrize('change,recreated', [('none', False), ('model', False), ('key', True), ('timeout', True), ('proxy', True)])
 def test_transport_reuse_does_not_cache_messages(monkeypatch, change, recreated):
     requests, created = sdk_transport(monkeypatch, '{"intent":"balance"}')
     GroqProvider().extract('first')
     if change == 'model': monkeypatch.setenv('GROQ_MODEL', 'openai/gpt-oss-120b')
     if change == 'key': monkeypatch.setenv('GROQ_API_KEY', 'another-synthetic-key')
     if change == 'timeout': monkeypatch.setenv('AGENT_TIMEOUT_SECONDS', '30')
+    if change == 'proxy': monkeypatch.setenv('HTTPS_PROXY', 'http://synthetic-proxy.invalid')
     GroqProvider().extract('second')
     assert len(created) == (2 if recreated else 1)
     assert [json.loads(r.content)['messages'][1]['content'] for r in requests] == ['first', 'second']
@@ -174,7 +175,7 @@ def test_groq_diagnostic_uses_actual_extraction_and_reports_latency(monkeypatch,
     assert 'synthetic-groq-secret' not in output and 'reasoning' not in output
 
 
-def test_groq_rate_limit_diagnostic_is_not_gemini_hint(monkeypatch, capsys):
+def test_groq_rate_limit_diagnostic_has_provider_specific_hint(monkeypatch, capsys):
     sdk_transport(monkeypatch, status=429)
     assert diagnose.main(provider='groq') == 1
     output = capsys.readouterr().out

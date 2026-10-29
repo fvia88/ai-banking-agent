@@ -2,7 +2,7 @@
 
 **帮客力 | Banking AI Agent | Hackathon submission**
 
-**Document version:** 1.1. **Implementation review:** 29 October 2026, repository commit `961ccee`. **Shared contracts:** 1.0.0. This editorial revision retains that implementation and verification snapshot.
+**Document version:** 1.2. **Architecture review:** 29 October 2026, repository commit `961ccee`. **Provider revision:** 30 October 2026, Groq-only live interpretation. **Shared contracts:** 1.0.0. Verification dates are identified separately in Section 11.
 
 ## 1 Executive summary
 
@@ -10,7 +10,7 @@ Banking tasks often require users to navigate separate screens and repeat inform
 
 Natural-language requests become validated proposals and grounded replies. All accounts, transactions and execution effects are synthetic; no live bank, payment network or merchant cancellation service is connected.
 
-Gemini or Groq interprets natural language. Our application validates its output, calculates financial values deterministically and keeps execution under backend control. The model never receives authority to execute a transfer or cancellation.
+Groq interprets natural language. Our application validates its output, calculates financial values deterministically and keeps execution under backend control. The model never receives authority to execute a transfer or cancellation.
 
 ### Technical contributions
 
@@ -43,7 +43,7 @@ flowchart TD
   API --> Agent[Agent controller]
   API --> Modules[Finance, policy and subscription modules]
   API --> DB[(PostgreSQL)]
-  Agent <--> LLM[Gemini or Groq API]
+  Agent <--> LLM[Groq API]
 ```
 
 | Layer | Responsibility |
@@ -74,7 +74,7 @@ sequenceDiagram
   participant UI as Browser / user
   participant API as Backend
   participant Agent as Agent controller
-  participant Model as Gemini / Groq
+  participant Model as Groq
   participant DB as Database
   UI->>API: Transfer 50 CNY to Bob
   API->>DB: Load account and verified context
@@ -175,7 +175,7 @@ Explicit corrections such as "actually, 50 instead" update an unfinished draft a
 
 ### Provider behavior
 
-Gemini and Groq share the same validated intent boundary. Groq requests strict JSON schema output and low reasoning effort. Connections are reused per worker thread; request timeouts are bounded and automatic provider retries or fallback are not enabled. Provider failure returns a categorized safe reply and no new proposal. Tone cues affect wording only, never authorization.
+Groq is the live interpretation provider; the deterministic mock remains available for offline development. Both use the same validated intent boundary. Groq requests strict JSON schema output and low reasoning effort. Connections are reused per worker thread; request timeouts are bounded and automatic provider retries or fallback are not enabled. Provider failure returns a categorized safe reply and no new proposal. Tone cues affect wording only, never authorization.
 
 **Implementation:** `agent/service.py`, `agent/request_guard.py`, `agent/conversation.py`, `agent/provider.py`, `agent/prompts.py`, provider adapters.
 
@@ -399,17 +399,17 @@ $env:GROQ_MODEL = 'openai/gpt-oss-20b'
 docker compose up -d --build
 ```
 
-The website is available at `http://localhost:3000` and API documentation at `http://localhost:8000/docs`. Gemini is selectable through `AGENT_PROVIDER=gemini`, `GEMINI_API_KEY` and `GEMINI_MODEL`. Model availability is provider-dependent; configure an accessible model explicitly. Default provider requests time out after 20 seconds, configurable within 1-60 seconds.
+The website is available at `http://localhost:3000` and API documentation at `http://localhost:8000/docs`. Docker defaults to Groq; the API key must be present in the launching terminal. `GROQ_MODEL` overrides the default `openai/gpt-oss-20b`. Model availability depends on the provider. Default requests time out after 20 seconds, configurable within 1-60 seconds. Rebuild after code or dependency changes; recreate the backend after changing environment settings.
 
 For an offline demonstration, keep `USE_MOCK_AGENT=false` and set `AGENT_PROVIDER=mock`. This runs the actual agent controller with deterministic interpretation and the normal backend, finance and security flow. Setting `USE_MOCK_AGENT=true` selects a different backend stub and is not equivalent. The standalone agent CLI uses synthetic fixture tools rather than the website database.
 
-### Verification snapshot on 29 October 2026
+### Verification evidence
 
 | Check | Observed result |
 | --- | --- |
-| Combined Python suite | 987 passed, 22 skipped; one upstream Gemini SDK Pydantic deprecation warning. |
-| Frontend component and API tests | 21 passed. |
-| TypeScript and Vite production build | Passed. |
+| Combined Python suite | 981 passed, 22 PostgreSQL-dependent checks skipped, no warnings; run on 30 October 2026 after the Groq-only revision. |
+| Frontend component and API tests | 21 passed on 29 October 2026; frontend unchanged by the provider revision. |
+| TypeScript and Vite production build | Passed on 29 October 2026. |
 | Prior isolated browser rehearsal | Refresh preserved transcript and draft; New chat isolated memory; reopening restored one card without moving money; mobile history navigation worked. |
 
 The combined Python command uses the repository's installed test environment:

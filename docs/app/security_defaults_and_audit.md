@@ -7,7 +7,7 @@ The flag accepts case-insensitive true/false; invalid values and non-boolean
 constructor overrides still raise errors rather than silently selecting a mode.
 
 This flag controls security policy only. It is independent of USE_MOCK_AGENT
-(P2 mock versus real P1 code) and AGENT_PROVIDER (P1's mock versus Gemini).
+(P2 mock versus real P1 code) and AGENT_PROVIDER (P1's mock versus Groq).
 No provider keys or LLM configuration are changed by this update.
 
 ## Escalation event

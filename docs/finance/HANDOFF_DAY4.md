@@ -51,7 +51,7 @@ If the deck shows `reports/2026-09_synthetic_anomalies` (CNY 9254.70, seven flag
 - Not production MFA: no device binding, and the lock reset is a local operator command.
 - The MFA race tests ran on SQLite. P2 reports that the shared race tests pass on PostgreSQL;
   P3 has not re-run them (no PostgreSQL available locally).
-- Demo replies use deterministic mode (`AGENT_PROVIDER=mock`). Label them that way, not "live Gemini".
+- Demo replies use deterministic mode (`AGENT_PROVIDER=mock`). Label them that way, not "live Groq".
 
 ## 5. Test evidence
 

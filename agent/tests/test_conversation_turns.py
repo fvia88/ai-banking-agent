@@ -250,7 +250,7 @@ def test_abandonment_clears_pending_draft_without_calling_provider(monkeypatch, 
         supply(catalog, state)
     before = deepcopy(catalog)
     def unavailable():
-        raise ProviderError("Abandonment should not need Gemini")
+        raise ProviderError("Abandonment should not need the live provider")
     monkeypatch.setattr(service, "get_provider", unavailable)
     turn = service.process_turn(ChatInput(conversation_id="c1", message=command), catalog)
     assert turn.result.reply == "Noted, I've discarded your unfinished request."

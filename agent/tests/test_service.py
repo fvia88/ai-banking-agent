@@ -105,7 +105,7 @@ def test_social_words_do_not_intercept_longer_requests(monkeypatch, message):
 ])
 def test_exact_read_requests_bypass_provider_but_only_propose_lookup(monkeypatch, message, tool):
     def unavailable():
-        raise AssertionError('Exact read request should not call Gemini')
+        raise AssertionError('Exact read request should not call the live provider')
     monkeypatch.setattr(service, 'get_provider', unavailable)
     result = run(message)
     assert len(result.proposals) == 1
@@ -390,8 +390,8 @@ def test_provider_timeout(monkeypatch):
 
 
 def test_missing_key(monkeypatch):
-    monkeypatch.setenv("AGENT_PROVIDER", "gemini")
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("AGENT_PROVIDER", "groq")
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
     assert not run("balance").proposals
 
 
