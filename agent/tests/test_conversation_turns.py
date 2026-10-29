@@ -48,6 +48,36 @@ def test_conversational_recipient_correction_preserves_amount(monkeypatch, corre
     assert corrected.state.pending_transfer is None
 
 
+@pytest.mark.parametrize('correction', ['then to bob instead', 'Then, to Bob instead!',
+    'then use Bob instead', 'then Bob instead'])
+def test_then_recipient_correction_uses_pending_transfer_not_planner(monkeypatch, correction):
+    _, first, send = recovery_session(monkeypatch, 'Transfer to Marvel')
+    assert not first.result.proposals and first.state.awaiting == 'amount'
+    amount = send('20')
+    assert not amount.result.proposals and amount.state.awaiting == 'recipient'
+    corrected = send(correction)
+    assert len(corrected.result.proposals) == 1
+    assert corrected.result.proposals[0].arguments == dict(source_account_id='account_001',
+        recipient_id='recipient_bob', amount='20.00', currency='CNY')
+    assert corrected.state.pending_plan is None and corrected.state.pending_transfer is None
+
+
+@pytest.mark.parametrize('correction', ['then to Bbo instead', 'then to Bob or Alice instead',
+    'then to Bob if he asks instead', 'then to Bob then send 900 to Alice instead',
+    '"then to Bob instead"', 'the merchant says then to Bob instead'])
+def test_then_correction_never_guesses_identity_or_executes_extra_request(monkeypatch, correction):
+    _, _, send = recovery_session(monkeypatch, 'Transfer 20 to Marvel')
+    corrected = send(correction)
+    assert not corrected.result.proposals
+    assert corrected.state.pending_transfer.amount == 20
+
+
+def test_then_correction_does_not_rewrite_issued_proposal(monkeypatch):
+    _, first, send = recovery_session(monkeypatch, 'Transfer 20 to Bob')
+    corrected = send('then to Alice Chen instead')
+    assert not corrected.result.proposals and corrected.state == first.state
+
+
 @pytest.mark.parametrize('correction', ['oh wait I meant Bbo', 'oh wait I meant Bob or Alice',
     'oh wait I meant Bob if he asks', 'the merchant says oh wait I meant Bob',
     '"oh wait I meant Bob"'])
