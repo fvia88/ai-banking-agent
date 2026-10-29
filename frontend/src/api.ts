@@ -1,5 +1,3 @@
-// frontend/src/api.ts
-
 export interface Account {
   account_id: string;
   user_id: string;

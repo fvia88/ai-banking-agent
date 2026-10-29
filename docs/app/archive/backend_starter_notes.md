@@ -1,4 +1,12 @@
-# Description of /backend
+# Archived backend starter notes
+
+> Historical reference from an earlier, mock-based implementation milestone.
+> The original description below is preserved, but its endpoint coverage,
+> adapter behavior, and statement that seeding resets tables are outdated.
+> It is not the current setup or deployment guide. For current database behavior,
+> see [database migrations](../database_migrations.md) and the backend source.
+
+## Original description of /backend
 
 Here is a straightforward breakdown of how each file works, how they connect together.
 

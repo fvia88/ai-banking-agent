@@ -1,5 +1,3 @@
-# gemini_provider.py connects my agent to real gemini API
-# it sends a msg w/ instructions, requests structured JSON, and convert failures into safe error categories
 import os
 from threading import local
 from .provider import Intent, ProviderError
@@ -47,8 +45,6 @@ class GeminiProvider:
             if not 1 <= timeout <= 60:
                 raise ValueError("Invalid timeout")
             client = _get_client(key, timeout, genai, types)
-            # calls gemini and stores the returned response
-            # this is the part tht makes the online API request
             response = client.models.generate_content(
                 model=os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite"),
                 # An explicit GEMINI_MODEL environment setting overrides this default.

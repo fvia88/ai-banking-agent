@@ -1,7 +1,6 @@
 # backend/app/api/accounts.py
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.db.models import UserModel, AccountModel

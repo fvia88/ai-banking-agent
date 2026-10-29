@@ -19,7 +19,6 @@ from .money import ZERO, format_money, money, period_range, validate_period
 @dataclass(frozen=True)
 class SpendingConfig:
     # Category labels (case-insensitive) whose debits are NOT counted as spending.
-    # Default: none (see README "Open questions").
     excluded_debit_categories: frozenset[str] = field(default_factory=frozenset)
     anomalies: AnomalyConfig = DEFAULT_ANOMALY_CONFIG
 

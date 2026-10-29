@@ -3,6 +3,13 @@ __pycache__/
 *.py[cod]
 *$py.class
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.test-tmp*/
 
 # Virtual Environment
 .venv/
@@ -11,7 +18,25 @@ ENV/
 
 # Local SQLite databases
 *.db
+*.db-*
+*.sqlite
+*.sqlite-*
 *.sqlite3
+*.sqlite3-*
+*.dump
 
 # Environment files with private secrets
 .env
+.env.*
+!.env.example
+
+# Frontend dependencies and generated builds
+node_modules/
+frontend/dist/
+frontend/dist-ssr/
+*.tsbuildinfo
+
+# Local logs and operating-system metadata
+*.log
+.DS_Store
+Thumbs.db

@@ -55,10 +55,8 @@ class PolicyConfig:
     enforce_account_matching: bool = True
 
 
-# Standard default configuration instance
 DEFAULT_CONFIG = PolicyConfig()
 
-# Classification of tools
 READ_ONLY_TOOLS = frozenset(
     {
         ToolName.GET_BALANCE,

@@ -1,5 +1,4 @@
 """Opt-in live probe. Prints only fixed categories, never raw SDK errors."""
-# troubleshooting tool for gemini connection
 # run with python -m agent.diagnose
 import argparse
 from time import perf_counter
