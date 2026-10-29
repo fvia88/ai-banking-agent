@@ -15,3 +15,8 @@ ENV/
 
 # Environment files with private secrets
 .env
+.env.*
+!.env.example
+.neon/
+.neon
+node_modules/

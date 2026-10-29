@@ -1,0 +1,30 @@
+# Render Blueprint: one free Docker service. Neon is created separately.
+services:
+  - type: web
+    name: bankly-demo
+    runtime: docker
+    plan: free
+    dockerfilePath: ./infra/Dockerfile.shared
+    dockerContext: .
+    healthCheckPath: /healthz
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: AGENT_PROVIDER
+        value: groq
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-20b
+      - key: USE_MOCK_AGENT
+        value: "false"
+      - key: USE_MOCK_SECURITY
+        value: "false"
+      - key: USE_MOCK_SUBSCRIPTIONS
+        value: "false"
+      - key: BANKLY_DEMO_USERNAME
+        value: bankly
+      - key: BANKLY_DEMO_PASSWORD
+        generateValue: true
+      - key: AGENT_TIMEOUT_SECONDS
+        value: "20"

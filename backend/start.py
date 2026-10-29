@@ -15,6 +15,11 @@ def main():
     parser.add_argument("--reload", action="store_true")
     args = parser.parse_args()
 
+    # Neon CLI writes this private file for local development. Hosting/terminal
+    # environment variables take precedence; Docker excludes the file entirely.
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parents[1] / '.env.local', override=False)
+
     from app.db.seed import seed_database
     import uvicorn
 
