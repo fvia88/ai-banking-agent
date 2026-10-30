@@ -1,5 +1,3 @@
-# hello from claine
-# hello 2
 # backend/app/services/adapters.py
 import os
 from contracts.models import ChatInput, AgentResult, ActionProposal, BankingContext, PolicyDecision, Transaction, SpendingReport, SubscriptionReport
@@ -9,9 +7,7 @@ from app.mocks.security import MockSecurityAdapter
 from app.mocks.finance import MockFinanceAdapter
 from app.mocks.subscriptions import MockSubscriptionsAdapter
 from typing import Any, TYPE_CHECKING
-from decimal import Decimal
 from contracts.enums import ToolName, Cadence
-from datetime import datetime
 
 if TYPE_CHECKING:
     from agent.conversation import ConversationTurn

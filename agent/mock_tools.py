@@ -1,5 +1,4 @@
 """Read-only synthetic CLI helpers, not production analytics or execution."""
-# mock_tools.py reads fixtures, it provides fake account/recipient context and banking results
 import json
 from pathlib import Path
 from decimal import Decimal
@@ -33,7 +32,7 @@ def read_result(chat, proposal):
         data = dict(period=args["period"], total_spending=f"{sum(categories.values(), Decimal(0)):.2f}",
                     category_totals={k: f"{v:.2f}" for k, v in categories.items()})
     elif tool == "list_subscriptions":
-        # No detector is impersonated here; P5 supplies real candidate reports later.
+        # CLI fixtures omit detection; the backend uses P5's real detector.
         data = {"candidates": []}
     else:
         raise ValueError("Mock tools never execute state-changing actions")

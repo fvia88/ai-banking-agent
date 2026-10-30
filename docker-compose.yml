@@ -1,4 +1,3 @@
-# docker-compose.yml
 services:
   # --- 1. Database: PostgreSQL 16 ---
   postgres:

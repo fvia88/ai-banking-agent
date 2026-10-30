@@ -60,9 +60,9 @@ supports cancellation or whether a subscription is still active.
 `cancellation_supported` is therefore **always `False`** in detector output. A
 repeated payment is never turned into a cancellable record on its own.
 
-## ID-mapping proposal (for P2 and P1 — needs agreement)
+## Candidate IDs and backend mapping
 
-This is a proposal, not a frozen contract.
+These are internal module conventions, not additions to the frozen contracts.
 
 1. **Candidate id**: `sub_` plus the merchant name lowercased, non-alphanumeric
    characters replaced by `_` (`StreamBox` becomes `sub_streambox`). The same
@@ -111,8 +111,8 @@ Inputs: a candidate, the stored `Subscription` records, and the authenticated
 returns `ALREADY_CANCELLED` (not eligible), so the same cancellation is never
 proposed or executed twice. This only works if P2 saves the new status.
 
-The three new reason codes (`SUBSCRIPTION_NOT_FOUND`, `AMBIGUOUS_SUBSCRIPTION`,
-`ALREADY_CANCELLED`) are **proposed** and need P2's agreement. `assess_cancellation`
+The mapping reason codes (`SUBSCRIPTION_NOT_FOUND`, `AMBIGUOUS_SUBSCRIPTION`,
+`ALREADY_CANCELLED`) are consumed by the backend integration. `assess_cancellation`
 itself is unchanged and still returns only `ELIGIBLE` / `CANCELLATION_NOT_SUPPORTED`.
 
 `enrich_candidates` returns a copy of the report where `cancellation_supported`

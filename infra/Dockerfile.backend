@@ -1,20 +1,16 @@
-# infra/Dockerfile.backend
 FROM python:3.11-slim
 
-# Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH="/app/backend:/app"
 
 WORKDIR /app
 
-# Install Python requirements (uses pre-compiled wheels, no apt-get needed!)
 COPY backend/requirements.txt /app/backend/requirements.txt
 COPY agent/requirements.txt /app/agent/requirements.txt
 RUN python -m pip install --no-cache-dir --timeout 120 --retries 10 \
     -r /app/backend/requirements.txt -r /app/agent/requirements.txt
 
-# Copy backend application and shared team contracts
 COPY backend/ /app/backend/
 COPY contracts/ /app/contracts/
 COPY agent/ /app/agent/

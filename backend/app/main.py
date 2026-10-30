@@ -1,4 +1,3 @@
-# backend/app/main.py
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,7 +12,6 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-# CORS setup for future frontend milestone
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -22,7 +20,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Standardized Error Handling
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     return JSONResponse(
@@ -34,7 +31,6 @@ async def global_exception_handler(request: Request, exc: Exception):
         ).model_dump()
     )
 
-# Include routers under /api/v1
 app.include_router(health.router, prefix=settings.API_V1_PREFIX, tags=["Health"])
 app.include_router(accounts.router, prefix=settings.API_V1_PREFIX, tags=["Accounts"])
 app.include_router(transactions.router, prefix=settings.API_V1_PREFIX, tags=["Transactions"])

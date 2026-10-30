@@ -25,10 +25,9 @@ Explicit pending-ticket cancellation is implemented with owner/digest checks,
 execution-race protection, audit, and trusted P1 continuation. Completed operations
 remain immutable. See `approval_cancellation.md` for supported state transitions.
 
-1. Establish the required level of human takeover with P1/P4. The present pause
-   command is truthful but is not an assigned human review workflow. Any proposed
-   backend review/control state must survive restart and prevent an LLM from
-   resuming itself or clearing a security lock.
+1. A separate human takeover workflow is deferred for this submission candidate.
+   Keep P1's existing pause/handoff wording and do not claim an assigned staff
+   review or contacted person. No backend takeover interface was implemented.
 2. Complete decision/control audit coverage and the security self-assessment,
    including prototype authentication, static demo recipient context, simulated
    MFA/cancellation, bounded planning, no post-commit reversal, and disabled

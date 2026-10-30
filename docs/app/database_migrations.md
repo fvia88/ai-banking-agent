@@ -61,6 +61,11 @@ It preserves legacy amounts and initializes missing dates to the upgrade day;
 those totals expire at the next Shanghai day boundary. See
 `daily_transfer_lifecycle.md` for lazy rollover, atomic accounting and tests.
 
+`0007_chat_history` adds owner-scoped conversation summaries and visible chat
+messages. Transcript storage is separate from P1 working memory; existing
+financial records are preserved. The frontend loads saved messages and refreshes
+approval status without authorizing execution.
+
 The older `001_add_mfa_lifecycle.sql` is retained as a manual repair reference;
 automatic startup uses the Python revisions, not that SQL file. No manual stamp
 or database reset is required for the supported existing schemas.

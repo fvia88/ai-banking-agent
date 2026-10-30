@@ -20,3 +20,23 @@ ENV/
 .neon/
 .neon
 node_modules/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.test-tmp*/
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3-*
+*.dump
+# Frontend dependencies and generated builds
+frontend/dist/
+frontend/dist-ssr/
+*.tsbuildinfo
+# Local logs and operating-system metadata
+*.log
+.DS_Store
+Thumbs.db
