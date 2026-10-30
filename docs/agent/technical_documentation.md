@@ -1,8 +1,14 @@
-# bank.ly Technical Documentation
+# bank.ly 帮客力
 
-**帮客力 | Banking AI Agent | Hackathon submission**
+Technical Documentation
 
-**Document version:** 1.2. **Architecture review:** 29 October 2026, repository commit `961ccee`. **Provider revision:** 30 October 2026, Groq-only live interpretation. **Shared contracts:** 1.0.0. Verification dates are identified separately in Section 11.
+2026 深圳国际金融科技大赛 (FinTechathon)
+
+Artificial Intelligence Track
+
+Team SUSTech 南方科技大学
+
+GitHub repository: [github.com/fvia88/ai-banking-agent](https://github.com/fvia88/ai-banking-agent)
 
 ## 1 Executive summary
 
@@ -26,7 +32,7 @@ These contributions are application engineering around existing model APIs; the 
 | Smart transfers | Named verified recipients, amount clarification, corrections and explicit approval; simulated MFA when required. |
 | Subscription management | Recurring-charge candidates, stored-record eligibility and confirmed simulated cancellation. |
 
-This document explains the current implementation rather than claiming every example in the challenge brief is complete. Sections 2-3 describe the system; Sections 4-7 explain the algorithms; Sections 8-9 cover security; Sections 10-12 cover persistence, reproducibility, verification and remaining limitations.
+This document explains the current implementation rather than claiming every example in the challenge brief is complete. Sections 2-3 describe the system; Sections 4-7 explain the algorithms; Sections 8-9 cover security; Sections 10-11 cover persistence, deployment and verification.
 
 **Design invariant:** understanding a request, proposing an action, approving it and confirming its completion are separate steps.
 
@@ -39,7 +45,7 @@ The FastAPI backend is the composition root. It is the only application layer th
 ```mermaid
 %% architecture
 flowchart TD
-  UI[React and TypeScript browser UI] --> API[FastAPI through Nginx]
+  UI[React and TypeScript browser UI] --> API[FastAPI; local Nginx or hosted gateway]
   API --> Agent[Agent controller]
   API --> Modules[Finance, policy and subscription modules]
   API --> DB[(PostgreSQL)]
@@ -49,7 +55,7 @@ flowchart TD
 | Layer | Responsibility |
 | --- | --- |
 | React and TypeScript | Chat, saved conversations, account views, transaction views, subscription views and approval or MFA controls. |
-| Nginx and FastAPI | Serve the frontend, proxy `/api/v1`, resolve demo identity and coordinate controlled operations. |
+| Web serving and FastAPI | Locally, Nginx serves the frontend and proxies `/api/v1`. On Render, the FastAPI shared gateway serves the compiled frontend and protects API access. The backend coordinates controlled operations. |
 | Agent controller | Intent extraction, input grounding, clarification state, bounded planning and user-facing replies. |
 | Finance module | Exact spending aggregation, categorization and rule-based anomaly detection. |
 | Security policy module | Pure fail-closed policy decisions; the backend persists and enforces their outcomes. |
@@ -58,7 +64,7 @@ flowchart TD
 
 The external model receives the request text, instructions and output schema. Account selection, recipient IDs, subscription state and tool-result validation are handled in application code. Financial reports are formatted locally rather than sent to an LLM to calculate or invent values.
 
-Docker Compose runs frontend, backend and PostgreSQL services. SQLite supports local development and disposable tests. Independent mock adapters support module development, while the real agent also has a deterministic mock *interpretation provider*.
+Local Docker Compose runs separate frontend, backend and PostgreSQL services. The hosted demo runs the compiled frontend and FastAPI together in one Render Docker service, with persistent PostgreSQL on Neon and Groq for interpretation. Render provides HTTPS; private environment variables hold database and provider credentials. SQLite supports local development and disposable tests. Independent mock adapters support module development, while the real agent also has a deterministic mock *interpretation provider*.
 
 **Implementation:** `backend/app/services/adapters.py`, `backend/app/api/chat.py`, `frontend/src/App.tsx`, `docker-compose.yml`, `infra/`.
 
@@ -377,81 +383,32 @@ History reads restore approval cards from owned server tickets, verify their ori
 | Approval lifecycle | `GET /actions/{id}`; `POST /actions/{id}/confirm`, `/verify`, `/cancel`, `/continue` |
 | Operational views | `GET /audit`, `GET /demo/otp-inbox`, `GET /health` |
 
-The current identity mechanism is a demo header with a configured fallback user, not a login/session system. Ownership checks use the resolved demo identity but do not prevent a caller from selecting another known demo identity. Chat content, approvals and audit details are stored without application-layer encryption; retention and deletion controls are not yet implemented. Earlier messages that were never stored cannot be recovered retroactively.
+The local identity mechanism uses a demo header with a configured fallback user, not individual customer authentication; a caller can select another known demo identity. The hosted shared gateway adds HTTP Basic access control over HTTPS, pins requests to synthetic user `usr_demo_01` and ignores caller-selected user headers. All authorized visitors share that account, saved conversations, balances, subscriptions, daily counters and safety locks. This shared gate is not a personal banking login. Chat content, approvals and audit details are stored without application-layer encryption; retention and deletion controls are not yet implemented. Earlier messages that were never stored cannot be recovered retroactively.
 
 **Implementation:** `backend/app/db/models.py`, `backend/migrations/`, `session_store.py`, `chat_history.py`, `backend/app/api/conversations.py`, `frontend/src/App.tsx`, `frontend/src/api.ts`.
 
 <!-- pagebreak -->
 
-## 11 Reproduction and verification
+## 11 Deployment and verification
 
-### Local demonstration
+### Shared demonstration
 
-Use Docker Compose with the repository's three services. Configure a provider key privately in the launching terminal; never put it in frontend code, screenshots or committed files. For a Groq demonstration:
+The shared website is [bankly-demo.onrender.com](https://bankly-demo.onrender.com). Render runs the compiled frontend and FastAPI in one Docker web service. Neon stores PostgreSQL data independently of the service filesystem. Groq provides interpretation using `openai/gpt-oss-20b`.
 
-```powershell
-$env:USE_MOCK_AGENT = 'false'
-$env:USE_MOCK_SECURITY = 'false'
-$env:USE_MOCK_SUBSCRIPTIONS = 'false'
-$env:AGENT_PROVIDER = 'groq'
-$env:GROQ_MODEL = 'openai/gpt-oss-20b'
-# Set GROQ_API_KEY privately in this terminal first
-docker compose up -d --build
-```
+The demo username is `bankly`; the password is supplied privately to reviewers. Render stores the password, Groq API key and database connection string as environment variables. These secrets are not included in the technical document or repository. The shared gateway protects website and API access and pins requests to the synthetic demo account.
 
-The website is available at `http://localhost:3000` and API documentation at `http://localhost:8000/docs`. Docker defaults to Groq; the API key must be present in the launching terminal. `GROQ_MODEL` overrides the default `openai/gpt-oss-20b`. Model availability depends on the provider. Default requests time out after 20 seconds, configurable within 1-60 seconds. Rebuild after code or dependency changes; recreate the backend after changing environment settings.
+All authorized visitors share account balances, transactions, subscriptions, saved conversations and safety locks. Restarting the service preserves Neon data. Startup applies migrations and seeds an empty database without resetting an existing one. The free service may sleep when idle, so the first visit can take longer to load. All banking effects remain simulated.
 
-For an offline demonstration, keep `USE_MOCK_AGENT=false` and set `AGENT_PROVIDER=mock`. This runs the actual agent controller with deterministic interpretation and the normal backend, finance and security flow. Setting `USE_MOCK_AGENT=true` selects a different backend stub and is not equivalent. The standalone agent CLI uses synthetic fixture tools rather than the website database.
+Full hosting and local Docker setup instructions are maintained in the repository: [deployment instructions](https://github.com/fvia88/ai-banking-agent/blob/main/docs/app/free_shared_deployment.md). Local Docker remains an alternative for development; it uses its own database rather than automatically sharing the hosted Neon data.
 
-### Verification evidence
+### Verification approach
 
-| Check | Observed result |
-| --- | --- |
-| Combined Python suite | 981 passed, 22 PostgreSQL-dependent checks skipped, no warnings; run on 30 October 2026 after the Groq-only revision. |
-| Frontend component and API tests | 21 passed on 29 October 2026; frontend unchanged by the provider revision. |
-| TypeScript and Vite production build | Passed on 29 October 2026. |
-| Prior isolated browser rehearsal | Refresh preserved transcript and draft; New chat isolated memory; reopening restored one card without moving money; mobile history navigation worked. |
+Automated checks cover agent interpretation and conversation state, shared contracts, finance calculations, subscription detection, approval and MFA lifecycles, execution safety, persistence, and frontend behavior. The hosted gateway has additional checks for password protection, fixed demo identity, origin restrictions and request limits.
 
-The combined Python command uses the repository's installed test environment:
+Backend and domain tests are under `backend/tests/`, `agent/tests/`, `finance/tests/`, `security/tests/`, `subscriptions/tests/` and `tests/test_contracts.py`. Frontend checks run with `npm test` and `npm run build` from `frontend/`. Gateway checks are in `infra/test_shared_app.py`. PostgreSQL-specific checks require a separately configured disposable test database.
 
-```powershell
-$env:PYTHONPATH = 'backend;.'
-python -m pytest -p no:cacheprovider `
-  backend/tests agent/tests finance/tests security/tests `
-  subscriptions/tests tests/test_contracts.py -q
-```
+Test totals depend on the tested repository revision; earlier totals are omitted here rather than presented as current results. No new application test run is claimed by this document update. Automated provider tests use synthetic responses and do not establish live model accuracy or network reliability.
 
-Frontend checks are `npm run build` and `npm test` from `frontend/`. The 22 skipped cases require an explicitly configured disposable PostgreSQL test environment (`MIGRATION_TEST_POSTGRES_ADMIN_URL`); they are not claimed as passing PostgreSQL concurrency or migration evidence. Automated model tests use synthetic responses or offline providers. This run does not measure live model accuracy, network reliability or production latency.
+For a judging rehearsal, verify a balance read, a spending clarification, a transfer proposal with no balance change before approval, the approved balance change, subscription cancellation and persistence after refresh. Check required MFA and plan continuation separately. Coordinate testing because all shared visitors affect the same synthetic account.
 
-**Test locations:** `agent/tests/`, `backend/tests/`, `finance/tests/`, `security/tests/`, `subscriptions/tests/`, `tests/test_contracts.py`, `frontend/tests/`.
-
-<!-- pagebreak -->
-
-## 12 Scope, limitations and future work
-
-The prototype demonstrates the three selected banking scenarios and the Green, Yellow and Red approval model using synthetic data. It does not claim complete implementation of every challenge example or production banking readiness.
-
-### Prototype simplifications
-
-Accounts, recipients, ledger changes and subscription cancellation are synthetic. The recipient directory is demo context, not a customer address book. The demo identity header is not authentication; callers can select another known demo identity. OTP delivery through the console and demo inbox demonstrates the verification lifecycle but is not an independent production factor. No live bank settlement or merchant cancellation takes place.
-
-### Challenge coverage and functional boundaries
-
-| Area | Implemented demonstration and boundary |
-| --- | --- |
-| Three selected scenarios | Named transfers, monthly spending with anomaly flags, and recurring-charge detection with cancellation. Phone-number lookup, scheduled transfers, split bills, annual-report interaction and renewal reminders are not implemented. |
-| Additional scenario families | Wealth operations, card management, birthday scheduling and third-party purchasing are outside the selected scope. |
-| Planning and recovery | A fixed two-node dependency graph supports cancellation then transfer. Arbitrary DAG generation is absent. Failed writes roll back; completed operations have no automatic compensation. Human-takeover wording pauses work but does not assign an operator. |
-| Generated-code execution | The application invokes whitelisted operations and never executes model-generated code. A general restricted-code sandbox has not been implemented. |
-
-### Requirements before production deployment
-
-Before real-customer or public deployment, the system needs verified authentication and authorization, independent MFA delivery, TLS, managed secrets, restricted CORS, protected storage, retention controls, rate limits and comprehensive audit coverage. Development database credentials must be replaced. PostgreSQL concurrency and migration checks must run in a dedicated environment; the skipped checks in Section 11 are an explicit evidence gap. Real banking and merchant integrations require separate agreements and validation. These are future requirements, not properties established by the demo.
-
-### Implementation evidence and interpretation
-
-The submission scope follows the **Banking AI Agent** AI-track challenge brief. Implementation claims are grounded in the reviewed repository snapshot, executable shared contracts and the verification results in Section 11. The original team-interface specification documents the initial baseline; executable contracts resolve subsequent interface changes.
-
-Source evidence is organized under `agent/` for interpretation and planning; `backend/` for APIs, execution and persistence; `finance/`, `security/` and `subscriptions/` for domain logic; and `frontend/` plus `infra/` for presentation and deployment. Section-level implementation references identify the relevant files. Historical module notes may describe earlier revisions.
-
-**Submission statement:** bank.ly combines existing language-model APIs with our typed agent controller, deterministic financial algorithms, persistent state and guarded simulator execution. The project uses existing models for interpretation; it does not claim to have trained a foundation model or implemented a live banking service.
+**Implementation:** `render.yaml`, `infra/Dockerfile.shared`, `infra/start_shared.py`, `infra/shared_app.py`, `backend/app/db/seed.py`.

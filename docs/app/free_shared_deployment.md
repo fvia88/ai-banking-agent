@@ -77,6 +77,8 @@ sets the demo username to `bankly`. Render supplies `PORT` and
 7. The browser asks for a username and password. Enter `bankly` and the generated
    `BANKLY_DEMO_PASSWORD`, available in the service's Environment settings.
 
+For submission, list the demo URL and username (`bankly`) in the deployment instructions. Provide the actual demo password privately through the submission portal or judging channel; do not commit it or include it in the technical PDF. API keys and database connection strings remain private hosting secrets.
+
 Do not enter your Groq key in the browser's demo-password prompt. Share the demo
 password privately with judges/team members. Render terminates HTTPS; backend
 and database credentials stay server-side. The generated password can be changed
