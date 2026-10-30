@@ -81,7 +81,7 @@ pre-existing security-default test failure. That disagreement is now resolved:
 local code and Compose default to real P4. The later full suite passed all 756
 tests; see `security_defaults_and_audit.md` for current evidence.
 
-To run race checks, use the commands in `concurrency_reproduction.md`. Set
+To run race checks, use the [verification commands](deployment.md#verification). Set
 MIGRATION_TEST_POSTGRES_ADMIN_URL to a disposable PostgreSQL server's admin URL
 to enable PostgreSQL tests; otherwise those parametrizations are skipped. That
 test user needs permission to create/drop uniquely named test databases.

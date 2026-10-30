@@ -65,7 +65,7 @@ docker compose exec backend python -m app.db.reset_safety_lock --user-id usr_dem
 Rehearse on a disposable database, and show at most one wrong code in the recording.
 
 Note: this transfer also adds `Transfers 1200.00` to Alice's October spending report
-(see `SIGNOFF.md`).
+(see [spending rules](RULES.md)).
 
 ## Known limits (state these honestly)
 

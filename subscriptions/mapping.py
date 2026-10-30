@@ -27,7 +27,6 @@ from subscriptions.detector import AMOUNT_TOLERANCE
 from subscriptions.eligibility import assess_cancellation
 
 # Reason codes added on top of ELIGIBLE / CANCELLATION_NOT_SUPPORTED.
-# They need P2's agreement before the backend relies on them.
 NOT_FOUND = "SUBSCRIPTION_NOT_FOUND"
 AMBIGUOUS = "AMBIGUOUS_SUBSCRIPTION"
 ALREADY_CANCELLED = "ALREADY_CANCELLED"

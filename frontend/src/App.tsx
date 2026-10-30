@@ -1,4 +1,3 @@
-// frontend/src/App.tsx
 import { useState, useEffect, useRef } from 'react';
 import { fetchAccounts, fetchTransactions, sendChatMessage, confirmAction, verifyAction, cancelAction, fetchActionStatus, continueAction, fetchSubscriptions, fetchStoredSubscriptions, fetchAuditLogs, fetchDemoInbox } from './api';
 import type { Account, Transaction, ChatMessage, ActionProposal, SubscriptionCandidate, StoredSubscription, AuditEvent, DemoInboxMessage } from './api';
@@ -218,7 +217,6 @@ export default function App() {
     const userText = inputMessage.trim();
     setInputMessage('');
     
-    // Append user message immediately
     setMessages((prev) => [...prev, { sender: 'user', text: userText }]);
     setSending(true);
 
@@ -227,7 +225,6 @@ export default function App() {
       if (activeConversation.current !== selectedId) return;
       rememberApprovals(response.actions);
       
-      // Append AI response with any proposed actions
       setMessages((prev) => [
         ...prev,
         {
@@ -326,7 +323,6 @@ export default function App() {
     await updateConversation(actionId);
   }
 
-  // handle clicking confirm
   async function handleConfirm(actionId: string, digest: string) {
     try {
       const res = await confirmAction(actionId, digest);
@@ -359,7 +355,6 @@ export default function App() {
     await updateConversation(actionId);
   }
 
-  // handle entering the MFA code
   async function handleVerify(actionId: string, code: string) {
     try {
       const res = await verifyAction(actionId, code);
