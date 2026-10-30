@@ -1,5 +1,11 @@
 # Memory trial 1
 
+> Maintenance note (30 October 2026): live commands now target Groq. Earlier
+> observations describe the provider used at that milestone and are not Groq
+> benchmark evidence. See README.md for current setup and technical_documentation.md
+> for current capabilities; the historical limitations below may be superseded.
+
+
 ## Spending report explanation
 
 ### P3 merged-output validation (2026-10-19)
@@ -61,7 +67,7 @@ IDs. Unknown codes receive a generic flag description. Free-text reasons are
 not echoed; suspicious labels/IDs are withheld. The agent does not guess a
 merchant, transaction amount or historical baseline from an anomaly code.
 Detailed transaction explanations and separate diagnostics await an agreed
-trusted input format. No Gemini call is needed to format a returned report.
+trusted input format. No live-provider call is needed to format a returned report.
 
 ## P1 rehearsal - one command (2026-10-19)
 
@@ -96,7 +102,7 @@ competition's connected cancellation-to-transfer scenario.
 ### Optional live interpretation segment
 
 ```powershell
-agent/.venv/Scripts/python.exe -m agent.cli --interactive --provider gemini
+agent/.venv/Scripts/python.exe -m agent.cli --interactive --provider groq
 ```
 
 Enter these lines one at a time:
@@ -114,7 +120,7 @@ quit
 
 Expected proposals: October spending lookup; 500.00 CNY transfer to
 recipient_alice; cancellation of sub_streambox. Only exact follow-up answers are
-handled locally; Gemini interprets the initial requests. Interactive mode does
+handled locally; the live provider interprets the initial requests. Interactive mode does
 not resolve tool results, so it must not report spending totals here.
 
 Keep the offline rehearsal available if API access fails. A provider failure
@@ -148,7 +154,7 @@ Repeat with Cancel my subscription, then never mind, then StreamBox. The draft
 is discarded, so the final bare merchant name must not produce a cancellation
 proposal. This does not revoke previously issued proposals or cancel a bank action.
 
-Use --provider gemini on the interactive command to interpret the initial request
+Use --provider groq on the interactive command to interpret the initial request
 online. Exact merchant-name follow-ups use local matching against the current
 trusted subscription list. Matching is case-insensitive and requires the whole
 merchant name. Duplicate merchant names remain ambiguous and require selection
@@ -177,13 +183,13 @@ proposes analyze_spending with account_001 and period 2026-11. No figures are
 reported until a matching trusted tool result is returned. The interactive
 demo remains proposal-only.
 
-To try Gemini wording instead, start with:
+To try the live provider wording instead, start with:
 
 ```powershell
-agent/.venv/Scripts/python.exe -m agent.cli --interactive --provider gemini
+agent/.venv/Scripts/python.exe -m agent.cli --interactive --provider groq
 ```
 
-Enter "Where did my money go?", then "2026-11" (without quotes). Gemini handles
+Enter "Where did my money go?", then "2026-11" (without quotes). the live provider handles
 the initial request; the exact YYYY-MM follow-up is validated locally. Enter
 these answers at the CLI's You: prompt, not at the PowerShell prompt.
 
@@ -215,7 +221,7 @@ agent/.venv/Scripts/python.exe -m pytest -p no:cacheprovider tests/test_contract
 ```
 
 Observed: **217 passed**, with one existing Google SDK Pydantic deprecation
-warning. These are automated tests; they do not make live Gemini requests.
+warning. These are automated tests; they do not make live the live provider requests.
 The environment settings above apply to this terminal session.
 
 ### 2. Offline rehearsal
@@ -255,21 +261,21 @@ agent/.venv/Scripts/python.exe -m agent.cli 'Analyze spending 2026-10' --resolve
 ```
 
 Observed: a proposal followed by CNY 5000.00 balance / CNY 1843.00 October
-spending. Both figures come from fixtures, not a bank or Gemini.
+spending. Both figures come from fixtures, not a bank or the live provider.
 Conversation isolation is covered by the regression suite and Trial 3 below.
 
-### 3. Live Gemini rehearsal
+### 3. Live provider rehearsal
 
 If this terminal has not inherited your previously saved key, load it without
 printing it:
 
 ```powershell
-if (!$env:GEMINI_API_KEY) {
-    $env:GEMINI_API_KEY = [Environment]::GetEnvironmentVariable('GEMINI_API_KEY', 'User')
+if (!$env:GROQ_API_KEY) {
+    $env:GROQ_API_KEY = [Environment]::GetEnvironmentVariable('GROQ_API_KEY', 'User')
 }
-agent/.venv/Scripts/python.exe -m agent.cli 'How much money do I have?' --provider gemini
-agent/.venv/Scripts/python.exe -m agent.cli 'Could you send 500 yuan to Bob?' --provider gemini
-agent/.venv/Scripts/python.exe -m agent.cli --interactive --provider gemini
+agent/.venv/Scripts/python.exe -m agent.cli 'How much money do I have?' --provider groq
+agent/.venv/Scripts/python.exe -m agent.cli 'Could you send 500 yuan to Bob?' --provider groq
+agent/.venv/Scripts/python.exe -m agent.cli --interactive --provider groq
 ```
 
 For the interactive command enter Transfer to Alice, then 500, then Alice Chen,
@@ -278,7 +284,7 @@ then quit, each on a separate line.
 Observed in live service checks: the balance wording produced get_balance;
 the Bob wording produced request_transfer for 500.00 CNY to recipient_bob;
 the Alice conversation asked both clarification questions and then produced the
-correct proposal. The initial messages used Gemini; exact amount/name
+correct proposal. The initial messages used the live provider; exact amount/name
 follow-ups used local clarification logic. No banking actions executed.
 
 The first restricted-network attempt failed with network_connection_error;
@@ -307,10 +313,10 @@ expected results below apply. Type `quit`, press Ctrl+C, or end input to exit
 cleanly. The old pasted block below is retained as an explanatory alternative;
 you no longer need to paste it to run the trial.
 
-To use Gemini for the initial request instead of mock interpretation:
+To use the live provider for the initial request instead of mock interpretation:
 
 ```powershell
-agent/.venv/Scripts/python.exe -m agent.cli --interactive --provider gemini
+agent/.venv/Scripts/python.exe -m agent.cli --interactive --provider groq
 ```
 
 That requires your configured key and API access. Exact amount/name answers
@@ -435,7 +441,7 @@ After `never mind`, expect `Unfinished request discarded.`, no proposals, and
 state with pending_transfer=null and awaiting=null. The next request should
 propose 300.00 CNY to recipient_bob; it must not reuse Alice or 500.00.
 
-Abandonment is local and does not require Gemini. Matching is case-insensitive
+Abandonment is local and does not require the live provider. Matching is case-insensitive
 and permits trailing sentence punctuation. Only a standalone command clears
 the draft; quoted words or an embedded phrase are not an abandonment command.
 The caller must retain the cleared returned state. This does not revoke a
@@ -469,7 +475,7 @@ context. The caller keeps a separate catalog/state snapshot for each conversatio
 This verifies in-process state isolation, not authentication or production
 cross-user authorization. P2 must bind stored conversations to authenticated
 users and use the correct snapshot when handling each request. No database,
-backend code, live Gemini calls, or banking execution are involved in these tests.
+backend code, live the live provider calls, or banking execution are involved in these tests.
 
 ## Trial 4 - tool-result round trip and matching
 
@@ -483,7 +489,7 @@ agent/.venv/Scripts/python.exe -m agent.cli 'Analyze spending 2026-10' --resolve
 Each command prints a proposal first, then a grounded reply: balance CNY 5000.00
 or October spending CNY 1843.00. The caller retains the original proposal,
 mock_tools supplies a typed synthetic result with matching arguments, and the
-accepted request is consumed in returned state. No Gemini calls or mutations occur.
+accepted request is consumed in returned state. No live-provider calls or mutations occur.
 
 Run mismatch and replay checks:
 

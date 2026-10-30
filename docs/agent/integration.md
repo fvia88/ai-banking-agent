@@ -121,8 +121,8 @@ format, to be agreed before production integration.
 - Branch: feature/agent. Reviewed commit: 4b0dd75 (add milestone plan (temp)).
 - Working tree was clean before this documentation change.
 - Shared contract version: 1.0.0.
-- Combined offline baseline: 149 passed, one existing Gemini SDK/Pydantic warning.
-- No Gemini requests, seed resets, runtime changes, or backend edits in this task.
+- Combined offline baseline: 149 passed, one existing historical provider SDK/Pydantic warning.
+- No live-provider requests, seed resets, runtime changes, or backend edits in this task.
 
 Exact PowerShell command from repository root:
 
@@ -147,7 +147,7 @@ keeps this check separate from a persistent demo database.
 | clarification_request string | Existing limited replay convention, not complete multi-turn state |
 
 The catalog is not an OpenAI-style type/function wrapper and is not sent directly
-to Gemini. The provider extracts Intent; P1 resolves verified IDs and validates
+to the live model. The provider extracts Intent; P1 resolves verified IDs and validates
 canonical arguments. Generate parameters from TOOL_ARGUMENT_MODELS, not by copying
 hand-written schemas. Keep common conversation context consistent across entries.
 
@@ -262,7 +262,7 @@ performed by the runnable balance example below.
 
 Run this Python block from the repository root using the agent virtual environment.
 It calls the real public service interface with the mock provider; it does not
-import P2, call Gemini, or execute mutations. Fixture helpers are demo-only.
+import P2, call the live provider, or execute mutations. Fixture helpers are demo-only.
 
 ```python
 import os
@@ -511,8 +511,8 @@ user, account and original action. Matching echoed fields alone does not prove
 this. Keep execution action IDs, confirmation, MFA and atomic idempotency in the
 backend. Never put backend metadata into the frozen tool argument dictionaries.
 
-Configuration: `AGENT_PROVIDER=gemini`, `GEMINI_API_KEY`, optional `GEMINI_MODEL`
-(default `gemini-3.1-flash-lite`). The adapter reads process environment variables;
+Configuration: `AGENT_PROVIDER=groq`, `GROQ_API_KEY`, optional `GROQ_MODEL`
+(default `openai/gpt-oss-20b`). The adapter reads process environment variables;
 a settings class reading `.env` does not automatically populate `os.environ`.
 Use `AGENT_PROVIDER=mock` for offline integration tests.
 

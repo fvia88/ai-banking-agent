@@ -32,9 +32,6 @@ def get_provider() -> Provider:
     if name == "mock":
         from .mock_provider import MockProvider
         return MockProvider()
-    if name == "gemini":
-        from .gemini_provider import GeminiProvider
-        return GeminiProvider()
     if name == "groq":
         from .groq_provider import GroqProvider
         return GroqProvider()

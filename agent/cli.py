@@ -39,7 +39,7 @@ def _interactive(catalog):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Synthetic banking agent demo; no mutations")
     parser.add_argument("message", nargs="?", default=None)
-    parser.add_argument("--provider", choices=["mock", "gemini", "groq"], default="mock")
+    parser.add_argument("--provider", choices=["mock", "groq"], default="mock")
     parser.add_argument("--clarify", help="Follow-up answer; CLI supplies prior request explicitly")
     parser.add_argument("--resolve-read", action="store_true")
     parser.add_argument("--interactive", action="store_true", help="Run the in-memory conversation demo")

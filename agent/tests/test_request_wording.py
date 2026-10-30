@@ -71,7 +71,7 @@ def test_polite_request_still_checks_amount_and_recipient(monkeypatch):
 ])
 def test_language_interpretation_can_reach_read_tools(monkeypatch, message, intent, tool):
     # Recorded interpretations test service behavior, not a claim that a stub
-    # understands language. Real Gemini results are recorded separately in docs.
+    # understands language. Live-provider quality must be checked separately from offline tests.
     result = process(monkeypatch, message, intent)
     assert result.proposals[0].tool.value == tool
 
@@ -134,7 +134,7 @@ def test_typo_transfer_retains_original_request_during_clarification(monkeypatch
     for entry in catalog:
         entry['context']['conversation_state'] = first.state.model_dump(mode='json')
     def unavailable():
-        raise ProviderError('Exact answers should not call Gemini')
+        raise ProviderError('Exact answers should not call the live provider')
     monkeypatch.setattr(service, 'get_provider', unavailable)
     final = service.process_turn(ChatInput(conversation_id='typo_memory', message='30'), catalog)
     assert final.result.proposals[0].arguments == dict(source_account_id='account_001',

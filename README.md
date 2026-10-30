@@ -1,5 +1,9 @@
 # Banking AI Agent — Shared starter contracts
 
+For the full application's optional hosted judging demo, see
+[free shared deployment instructions](docs/app/free_shared_deployment.md).
+The sections below describe the original shared-contract starter.
+
 This starter contains the **real executable contracts and synthetic fixtures**, frozen at v1.0.0. Commit these files to `main` before the five teammates start independent coding.
 
 ## Setup (Windows PowerShell)

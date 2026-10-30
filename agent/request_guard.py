@@ -138,7 +138,7 @@ def is_direct_request(message: str, intent: str) -> bool:
         return False
     if re.search(r"\b(note|merchant|quoted|quote|says|said|instructions?)\b", text):
         return False
-    # Gemini still chooses intent and extracts all fields. This only accepts
+    # The provider still chooses intent and extracts all fields. This only accepts
     # direct imperative framing with common polite request prefixes.
     prefix = _REQUEST_PREFIX
     if intent == "transfer":

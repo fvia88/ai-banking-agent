@@ -331,7 +331,7 @@ def test_social_message_does_not_hide_a_trusted_tool_result(monkeypatch):
 
 def test_fast_balance_uses_fresh_results_instead_of_caching_numbers(monkeypatch):
     def unavailable():
-        raise AssertionError('Exact read and result formatting must not call Gemini')
+        raise AssertionError('Exact read and result formatting must not call the live provider')
     monkeypatch.setattr(service, 'get_provider', unavailable)
     catalog = demo_catalog()
     chat = ChatInput(conversation_id='fresh_fast_reads', message='what is my balance')

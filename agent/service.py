@@ -48,6 +48,12 @@ def _draft_answer(text):
     import re
     value = text.strip().rstrip('.!?').strip()
     corrected = False
+    # Here "then" can introduce a replacement, rather than a second task.
+    # Keep the entire replacement text for the usual exact-field validation.
+    replacement = re.fullmatch(r'then(?:,\s*|\s+)(.+)\s+instead', value, re.I)
+    if replacement:
+        value = re.sub(r'^to\s+', '', replacement[1], flags=re.I).strip()
+        corrected = True
     # Discourse markers are removable only before an explicit correction cue.
     # 'oh wait I meant Bob' is a correction; 'Wait Bob' remains an exact name
     # answer, and quoted/reported commands are never searched for substrings.
@@ -211,7 +217,15 @@ def process_turn(chat: ChatInput, tool_catalog: list[dict],
             if supplied.conversation_id != chat.conversation_id:
                 raise ValueError("Conversation state belongs to a different conversation")
             original = supplied
-        planned = maybe_process_plan(chat, tool_catalog, tool_results or [], original, process_turn)
+        # Explicit corrections belong to the unfinished draft (or the guard
+        # against editing an issued card), not the multi-step "then" planner.
+        # New banking requests and existing plans keep their normal routing.
+        draft_correction = (not tool_results and original.pending_plan is None
+                            and (original.awaiting is not None or original.pending_tool_requests)
+                            and _draft_answer(chat.message)[2]
+                            and not is_new_banking_request(chat.message))
+        planned = (None if draft_correction else
+                   maybe_process_plan(chat, tool_catalog, tool_results or [], original, process_turn))
         if planned is not None:
             return planned
         # A standalone abandonment command concerns the local unfinished draft,

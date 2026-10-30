@@ -1,150 +1,90 @@
-# Person 1 agent milestone one
+﻿# Agent setup and integration
 
-Standalone stateless proposal service with an English deterministic mock and
-environment-configured Gemini SDK adapter. No bank connections or mutation
-execution. All CLI data is synthetic; CLI spending is a fixture-only stub, not
-P3 analytics. The subscription stub returns no candidates rather than pretending
-to implement P5 detection. See integration.md for backend adapter conventions.
+The agent interprets banking requests with **Groq**, validates structured intent,
+retains caller-owned clarification state and proposes typed tools. The backend
+supplies trusted context, applies security policy and executes approved simulator
+operations. The offline mock remains available for deterministic development.
 
-## Setup and verification from repository root
+## Install and verify from the repository root
 
 ```powershell
 uv venv --python 3.11 agent/.venv
 uv pip install --python agent/.venv/Scripts/python.exe -r agent/requirements.txt
 $env:PYTHONDONTWRITEBYTECODE = '1'
 agent/.venv/Scripts/python.exe -m pytest -p no:cacheprovider tests/test_contracts.py agent/tests -q
-agent/.venv/Scripts/python.exe -m agent.cli 'What is my balance?' --resolve-read
-agent/.venv/Scripts/python.exe -m agent.cli 'Analyze spending 2026-10' --resolve-read
-agent/.venv/Scripts/python.exe -m agent.cli 'Transfer 500 to Alice' --clarify 'Alice Chen'
 ```
 
-If Python 3.11+ is already installed, its standard venv/pip commands can replace
-uv. Dependencies are pinned for this milestone. Runtime and installs reside in
-agent/.venv and are ignored; do not commit secrets or the virtual environment.
+Python 3.11+ standard venv/pip commands can replace uv. Do not commit the virtual
+environment or API keys. Install the backend dependencies as well for its suite.
 
 ## Configuration
 
-- AGENT_PROVIDER: mock (default) or gemini for service calls.
-- GEMINI_API_KEY: environment only; required in Gemini mode.
-- GEMINI_MODEL: default gemini-3.1-flash-lite; an explicit environment value overrides it.
-- AGENT_TIMEOUT_SECONDS: integer 1 through 60, default 20.
+- `AGENT_PROVIDER`: `groq` for live interpretation or `mock` for offline development.
+  The standalone service and CLI default to mock; Docker defaults to Groq.
+- `GROQ_API_KEY`: required in the backend process environment for live requests.
+- `GROQ_MODEL`: defaults to `openai/gpt-oss-20b`; an explicit setting overrides it.
+- `AGENT_TIMEOUT_SECONDS`: integer from 1 through 60; default 20.
+- `USE_MOCK_AGENT=false`: connects the backend to this actual agent. Setting it to
+  true selects the backend stub, a different mechanism from `AGENT_PROVIDER=mock`.
 
-CLI explicitly defaults to mock regardless of AGENT_PROVIDER; use --provider
-gemini to opt in. It does not silently substitute mock results on API failure.
-
-```powershell
-$env:GEMINI_MODEL = 'gemini-3.1-flash-lite'
-agent/.venv/Scripts/python.exe -m agent.cli 'What is my balance?' --provider gemini
-```
-
-That command makes a real provider request; use a free-tier project and inspect
-its quota. A validated proposal confirms extraction works, not bank execution.
-Missing key, SDK/network errors, invalid JSON, and invalid arguments return a
-safe generic response without SDK error payloads or credentials. Retry manually
-after outages; use mock mode while offline. No automatic paid-provider fallback.
-
-## Optional Groq CLI trial
-
-Groq is an additional provider; Gemini remains available. This trial does not
-change Docker or the website's provider configuration. Install the updated
-`agent/requirements.txt` into your virtual environment first.
-
-With `GROQ_API_KEY` already configured in the same PowerShell terminal:
+Configure the key privately in the same PowerShell terminal that launches Docker:
 
 ```powershell
+$key = Read-Host "Paste Groq API key" -AsSecureString
+$env:GROQ_API_KEY = ([System.Net.NetworkCredential]::new('', $key).Password).Trim()
+Remove-Variable key
+$env:USE_MOCK_AGENT = 'false'
+$env:AGENT_PROVIDER = 'groq'
 $env:GROQ_MODEL = 'openai/gpt-oss-20b'
-agent/.venv/Scripts/python.exe -m agent.diagnose --provider groq --message 'Could you send 50?' --expected-intent transfer --repeat 3
-agent/.venv/Scripts/python.exe -m agent.cli --interactive --provider groq
+docker compose up -d --build
 ```
 
-Try `Could you send 50?`, followed by `Bob`: expect recipient clarification,
-then a transfer proposal. No banking action executes in this CLI. Read results
-use synthetic demo data, independently of the website database.
+After changing environment settings without changing code, recreate the backend
+with `docker compose up -d --force-recreate backend`. An existing container does
+not inherit changes made later to a terminal's environment. The key is never sent
+to the frontend. The website uses database data; the CLI uses synthetic fixtures.
 
-Use `diagnose` to compare provider request times: some CLI messages are handled
-locally and therefore do not measure model latency. Offline transport tests
-verify the adapter and safeguards, but live intent accuracy and connection
-reliability still require a real-key trial. Groq has its own free-tier quotas.
-There are no automatic retries or fallback to another provider. Use
-`--provider gemini` to select Gemini again.
+## Live diagnosis and interactive CLI
 
-## Limits
-
-Mock phrases include balance, spending YYYY-MM, list subscriptions, transfer
-AMOUNT to NAME, and cancel MERCHANT. It is a test aid, not a general LLM.
-AgentResult and tool arguments are validated separately. The provider extracts
-a private typed Intent; Python supplies canonical IDs and constructs all public
-replies. No provider-generated claim is presented as a verified banking result.
-The live adapter supports broader extraction but has not been quality-evaluated
-on every phrasing. Semantic intent extraction remains fallible; backend exact
-payload confirmation and policy are mandatory. No DAG, automatic cancellation
-then transfer, rollback, persistence, frontend, or risk engine is implemented in
-this milestone. This is not the full competition deliverable.
-
-## Verification on 15 October 2026
-
-41 tests passed: 14 existing contract cases and 27 agent cases (including
-parametrized cases). The installed Gemini SDK emits one Pydantic deprecation
-warning; tests pass. Mock CLI clarification and October spending demos passed.
-The live Gemini CLI returned the safe failure response; successful live model
-generation remains unverified. The SDK adapter was also tested offline with a
-fake SDK client for success, configured timeout/schema, and error redaction.
-
-### Live Gemini diagnosis
-
-The original default gemini-2.5-flash returned 404: unavailable to new users.
-The original response_schema=Intent conversion returned 400 because the SDK
-sent additional_properties in the legacy schema format. The adapter now uses
-gemini-3.8-flash and response_json_schema=Intent.model_json_schema(). The corrected
-live request returned 503 with a high-demand message. Live generation is still
-unverified; this remaining service response is distinct from the two corrected
-configuration errors. The user-facing service deliberately returns a generic
-failure and does not forward raw provider errors.
-
-For current troubleshooting, run this in the same terminal as the failed CLI:
+With the key available in this terminal:
 
 ```powershell
 agent/.venv/Scripts/python.exe -m agent.diagnose
+agent/.venv/Scripts/python.exe -m agent.diagnose --message 'Could you send 50?' --expected-intent transfer
+agent/.venv/Scripts/python.exe -m agent.cli --interactive --provider groq
 ```
 
-This makes one live request and reports a fixed safe error category and HTTP
-code, or validates a successful balance intent. It never prints keys, raw model
-output, prompts, or SDK exception payloads. Existing GEMINI_MODEL environment
-overrides take precedence over the new default; remove an obsolete override
-with Remove-Item Env:GEMINI_MODEL before retrying.
+The diagnostic makes one real extraction request and prints safe error categories,
+HTTP status when available and elapsed time. It never prints the key or raw model
+output. `--repeat 3` runs three sequential probes. API calls consume provider quota;
+offline tests do not establish live model accuracy, availability or latency.
 
-A subsequent live probe returned HTTP 400 with "User location is not supported
-for the API use." The diagnostic now labels this unsupported_location rather
-than invalid_request. This is a region-eligibility rejection, not evidence that
-the JSON schema is still invalid. Prior 503/504 responses were different errors;
-successful model generation was unverified at the time of that probe.
+## Offline rehearsal
 
-## Natural request wording verified on 17 October 2026
+```powershell
+agent/.venv/Scripts/python.exe -m agent.cli 'What is my balance?' --resolve-read
+agent/.venv/Scripts/python.exe -m agent.cli 'Analyze spending 2026-10' --resolve-read
+agent/.venv/Scripts/python.exe -m agent.cli --interactive --provider mock
+```
 
-The service now accepts common direct polite forms, including "Could you send
-500 yuan to Bob?", "Please transfer 500 to Bob", and "I want to give 500 yuan
-to Bob" when the provider extracts the corresponding intent and arguments.
-The exact "Could you send 500 yuan to Bob?" prompt passed a live Gemini
-3.1 Flash-Lite check and returned a validated request_transfer proposal.
+The mock uses deterministic rules; it is not an LLM. CLI proposals never execute
+transfers or cancellations. To use offline interpretation in the website, explicitly
+set `AGENT_PROVIDER=mock` while retaining `USE_MOCK_AGENT=false`.
 
-request_guard.py checks request framing, while the provider interprets intent.
-The guard conservatively rejects negations, quotes, reported note/merchant
-instructions, and hypothetical/conditional forms. This is a bounded safeguard,
-not a complete semantic security mechanism; unrecognized wording asks for a
-fresh explicit request. Backend validation and approval remain mandatory.
-Existing numeric-amount grounding and verified recipient checks remain in force.
-The mock parser still supports its original limited phrases; this change does
-not give it Gemini's language capabilities. Multi-turn polite-request replay is
-not broadened here and remains part of later conversation-harness work.
+## Interfaces and safeguards
 
-82 offline tests passed, including provider-independent request-framing cases
-using deliberately incorrect model interpretations. The existing SDK/Pydantic
-deprecation and thought-signature warnings are separate from this change.
+`process_message(ChatInput, tool_catalog, tool_results=None) -> AgentResult` remains
+the public stateless interface. `process_turn` additionally returns caller-owned
+state for persistence. Catalog, state and trusted-result conventions are documented
+in `integration.md`; `testing_memory_trial1.md` supplies local rehearsals.
 
-## Milestone two completed on 17 October 2026
+The live adapter requests strict JSON-schema intent, reuses a transport per worker
+thread and validates results through the same service as the mock. Request guards,
+exact amounts, verified identities, flexible spending dates and correlated tool
+results are provider-independent. No automatic retry, provider fallback or generated
+code execution is enabled. Failures create no new proposal. Backend confirmation,
+fresh policy checks and simulated MFA remain mandatory where required.
 
-See milestone-2.md for the final scope, live evidence, commands, and limits.
-The default model is now Gemini 3.1 Flash-Lite. Earlier default/model failures
-above are historical observations. The adapter reads visible text candidate
-parts directly and excludes thought parts. One metadata notice can still arise
-inside the pinned SDK; the SDK/Pydantic deprecation warning also remains.
+Historical milestone documents record earlier implementation evidence; current
+setup instructions and provider configuration are defined here. The submission
+architecture and current scope are in `technical_documentation.md`.
