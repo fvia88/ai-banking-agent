@@ -11,11 +11,13 @@ Person 4 owns:
   * `__init__.py`: Public package exports (`evaluate_action`, `PolicyConfig`, `SecurityReasonCode`, `DEFAULT_CONFIG`).
   * `policy.py`: The pure, fail-closed policy evaluation engine (`evaluate_action`).
   * `rules.py`: Policy rules, reason codes, threshold constants, and configuration dataclass.
-  * `tests/test_policy.py`: Comprehensive test suite containing 39 tests covering all fixture cases, boundaries, and adversarial vectors.
+  * `tests/test_policy.py`: Comprehensive test suite containing 84 tests covering all fixture cases, boundaries, and adversarial vectors.
 * `docs/security/`
-  * `threat_model.md`: Detailed STRIDE threat model and LLM-specific vulnerability analysis.
+  * `threat_model.md`: Detailed STRIDE threat model, LLM vulnerability analysis, and code sandbox boundaries.
   * `security_assessment.md`: Rigorous security review, tier taxonomy, and defense-in-depth evaluation.
   * `integration_guide.md`: Clear integration instructions, state machine, and code examples for Person 2 (Backend).
+  * `integration_test_matrix.md`: Detailed test matrix reconciling policy, runtime, and concurrency verifications.
+  * `security_self_assessment.md`: Comprehensive P4 self-assessment and release readiness evaluation.
 
 All implementations strictly conform to frozen shared contracts v1.0.0. No contracts, fixtures, or other team members' directories have been modified.
 
@@ -26,14 +28,24 @@ All implementations strictly conform to frozen shared contracts v1.0.0. No contr
 From the repository root (`ai-banking-agent`):
 
 ```powershell
-# Run Person 4 security policy tests
+# Run Person 4 security policy tests (84 passed)
 .\.venv\Scripts\python.exe -m pytest security/tests/test_policy.py -v
 
-# Run the complete test suite (contracts + security)
-.\.venv\Scripts\python.exe -m pytest -v
+# Run Person 4 security bridge tests (27 passed)
+$env:PYTHONPATH = "backend;.;contracts"
+.\.venv\Scripts\python.exe -m pytest backend/tests/test_security_bridge.py -v
+
+# Run Person 4 security integration tests (16 passed)
+.\.venv\Scripts\python.exe -m pytest backend/tests/test_security_integration.py -v
+
+# Run execution-time concurrency regression tests (6 passed on SQLite, 6 skipped on PostgreSQL)
+.\.venv\Scripts\python.exe -m pytest backend/tests/test_security_concurrency.py -v
+
+# Run the complete test suite (contracts + backend)
+.\.venv\Scripts\python.exe -m pytest tests/ backend/tests/ -v
 ```
 
-All 39 security tests and 14 contract tests pass with 100% success.
+**Test-count reconciliation (verified on HEAD `4ab698a`)**: the suites above overlap and must not be summed. The 27 security bridge tests, 16 security integration tests, and 6 SQLite concurrency tests are all *included in* the 238 passing tests of `backend/tests` (`backend/tests`: 238 passed, 22 skipped, 260 collected). Repository-wide (`security/tests` + `tests` + `backend/tests`; 358 collected): 84 + 14 + 238 = **336 unique passing test items**, 0 failed, and **22 skipped backend tests**. All 22 skips are PostgreSQL-only (`MIGRATION_TEST_POSTGRES_ADMIN_URL` unset), including the 6 PostgreSQL variants in `test_security_concurrency.py`; PostgreSQL concurrency has therefore **not** been verified.
 
 ---
 
