@@ -1,11 +1,32 @@
-# Banking AI Agent
+# bank.ly 帮客力
 
-A fintechathon prototype for natural-language banking with synthetic data.
-The app connects a React dashboard to FastAPI, PostgreSQL, the P1 agent, P3
-spending analytics, P4 security policy, and P5 subscription detection.
+**An AI banking agent for everyday financial tasks.**
 
-**No real bank connection, real money movement, or external merchant cancellation.**
-The default demo runs without an API key. Live Groq interpretation is optional.
+bank.ly 帮客力 brings account queries, spending analysis, transfers and subscription
+management into one conversational interface. Users can express requests naturally,
+clarify missing details and correct an unfinished request without starting over.
+Financial answers come from verified application data, while state-changing
+operations require explicit approval and risk-based verification.
+
+The application combines a React interface, FastAPI backend, PostgreSQL
+persistence and Groq-powered language understanding. A deterministic policy engine
+enforces permission tiers, transaction safeguards and persistent safety locks.
+
+The demonstration uses synthetic accounts and simulated financial
+operations. The hosted demo uses Groq; the local quick start also supports offline
+interpretation without an API key.
+
+## Choose how to access bank.ly
+
+| Goal | Starting point |
+|---|---|
+| Try the hosted demo | Open [bankly-demo.onrender.com](https://bankly-demo.onrender.com). Username: `bankly`. The demo password is supplied privately; visitors do not need an API key or local installation. |
+| Run locally | Follow [Deployment and local development](docs/app/deployment.md) for Docker setup, provider configuration and troubleshooting. The quick start below uses offline interpretation. |
+| Deploy your own shared website | Follow [Shared hosting with Render, Neon and Groq](docs/app/free_shared_deployment.md). Configure hosting secrets privately. |
+
+These guides cover different environments and are intentionally separate. The hosted
+demo shares one synthetic account across authorized visitors; local Docker uses its
+own database. The first hosted visit after inactivity may take longer to load.
 
 ## Start with Docker
 

@@ -395,7 +395,7 @@ SQLAlchemy 分开存财务状态、授权、工作记忆和可见消息。本地
 
 所有访问者共享余额、交易、订阅、会话和锁。重启保留 Neon 数据，启动迁移并初始化空数据库，不重置已有数据。免费服务空闲可能休眠，首次访问可能较慢。全部银行效果为模拟。
 
-完整云端和本地设置参见[部署说明](https://github.com/fvia88/ai-banking-agent/blob/main/docs/app/free_shared_deployment.md)。本地 Docker 默认使用自己的数据库，不自动共享 Neon。
+请先阅读仓库的 [README.md](https://github.com/fvia88/ai-banking-agent/blob/main/README.md)，按需求选择“体验云端演示”“本地运行”或“自行部署共享网站”。本地 Docker 与开发配置参见 [docs/app/deployment.md](https://github.com/fvia88/ai-banking-agent/blob/main/docs/app/deployment.md)；Render + Neon + Groq 云端部署参见 [docs/app/free_shared_deployment.md](https://github.com/fvia88/ai-banking-agent/blob/main/docs/app/free_shared_deployment.md)。两份指南面向不同环境，本地 Docker 默认使用独立数据库，不自动共享 Neon 数据。
 
 ### 验证方法
 

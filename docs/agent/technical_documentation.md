@@ -399,7 +399,7 @@ The demo username is `bankly`; the password is supplied privately to reviewers. 
 
 All authorized visitors share account balances, transactions, subscriptions, saved conversations and safety locks. Restarting the service preserves Neon data. Startup applies migrations and seeds an empty database without resetting an existing one. The free service may sleep when idle, so the first visit can take longer to load. All banking effects remain simulated.
 
-Full hosting and local Docker setup instructions are maintained in the repository: [deployment instructions](https://github.com/fvia88/ai-banking-agent/blob/main/docs/app/free_shared_deployment.md). Local Docker remains an alternative for development; it uses its own database rather than automatically sharing the hosted Neon data.
+Start with the repository's [README.md](https://github.com/fvia88/ai-banking-agent/blob/main/README.md), which separates three options: try the hosted demo, run locally, or deploy a shared instance. Local Docker and development instructions are in [docs/app/deployment.md](https://github.com/fvia88/ai-banking-agent/blob/main/docs/app/deployment.md). Render + Neon + Groq hosting instructions are in [docs/app/free_shared_deployment.md](https://github.com/fvia88/ai-banking-agent/blob/main/docs/app/free_shared_deployment.md). The two guides cover different environments. Local Docker uses its own database rather than automatically sharing the hosted Neon data.
 
 ### Verification approach
 
